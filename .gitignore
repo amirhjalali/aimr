@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+
+# user-local budget state — never commit spend data or caps
+budget/budget.json
+budget/ledger.jsonl
+
+# benchmark run outputs (manifests + artifacts); suites themselves are committed
+benchmarks/**/runs/
+runs/

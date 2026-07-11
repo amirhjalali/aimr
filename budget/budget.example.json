@@ -1,0 +1,10 @@
+{
+  "_note": "Copy to budget/budget.json (gitignored) and set your real caps. Pools are ACCOUNTS, not vendors. unit: tokens|calls|dollars. period: day|week|month. reserve_fraction: routing treats the pool as exhausted below this remaining fraction (budget.py remaining exits 3).",
+  "pools": {
+    "claude": { "unit": "tokens", "cap": 5000000, "period": "week", "reserve_fraction": 0.1 },
+    "codex": { "unit": "calls", "cap": 300, "period": "week", "reserve_fraction": 0.05 },
+    "gemini": { "unit": "calls", "cap": 1000, "period": "day", "reserve_fraction": 0.0 },
+    "grok": { "unit": "calls", "cap": 200, "period": "day", "reserve_fraction": 0.0 },
+    "replicate-dollars": { "unit": "dollars", "cap": 50, "period": "month", "reserve_fraction": 0.0 }
+  }
+}

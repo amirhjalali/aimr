@@ -1,0 +1,9 @@
+{
+  "name": "aimr",
+  "version": "1.0.0",
+  "description": "AIMR (AI Model Routing): skills pack + capability registry for cross-CLI agent interoperability — route image gen to Codex, edits/video to Grok, recon to Codex, bulk reading to Gemini, ranked by benchmarked quality and gated by your per-account token budgets.",
+  "author": { "name": "Amir H. Jalali" },
+  "homepage": "https://github.com/amirhjalali/aimr",
+  "license": "MIT",
+  "keywords": ["skills", "routing", "interoperability", "codex", "grok", "gemini", "benchmarks", "token-budget"]
+}

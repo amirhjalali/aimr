@@ -1,0 +1,253 @@
+{
+  "$schema_note": "AIMR (AI Model Routing) capability registry v1. Providers are ordered best-first per capability. Four contracts per provider: invocation (how to call), artifact (what comes back), cost (which account pool it draws), score (benchmarked, dated, auditable to a named suite). score.source='seeded' means imported from prior benchmark findings rather than a pack-run suite. Routing skills must skip invocation.type='web-ui' entries (recorded for honesty, not routable).",
+  "version": 1,
+  "updated": "2026-07-11",
+  "scale": "scores are 0-5, anchored rubrics (see benchmarks/)",
+  "capabilities": {
+    "image-generation": {
+      "description": "Text-to-image: illustrations, POD/print designs, mockups, text-in-scene graphics.",
+      "providers": [
+        {
+          "id": "codex/gpt-image-2",
+          "skill": "skills/image-gen-codex",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "python skills/image-gen-codex/scripts/codex_image_gen.py --prompt \"...\" --out out.png [--ref ref.png] [--size 1536x1024]",
+            "timeout_s": 300
+          },
+          "artifact": { "type": "file", "format": "png", "delivery": "path" },
+          "cost": { "pool": "codex", "est_per_call": "low", "confidence": "estimated" },
+          "score": {
+            "overall": 4.97,
+            "dims": { "quality": 5.0, "text_rendering": 5.0, "prompt_adherence": 4.9 },
+            "suite": "seeded:gabooja-labs/experiments/020-gpt-image-2-eval",
+            "date": "2026-07-01",
+            "source": "seeded",
+            "notes": "Won 19/20 archetypes vs Flux 2 Pro (4.38), Ideogram v3 (3.98), Nano-Banana 2 (3.80). 0 misspellings/60 incl. Japanese. ~10x slower (~119s/img)."
+          },
+          "gotchas": [
+            "prompts over ~150 words TIME OUT, not just slow down",
+            "aspect-ratio drift to poster orientation — lead prompt with 'Format:'",
+            "naming a living artist returns 'stream disconnected' (moderation disguised as rate limit)",
+            "no transparency ever — opaque white-BG RGB, plan a background-removal hop",
+            "~1.5MP native; upscale (4x Real-ESRGAN) for large prints",
+            "no character memory — anchor every frame with a reference PNG"
+          ]
+        },
+        {
+          "id": "replicate/flux-1.1-pro",
+          "skill": null,
+          "invocation": { "type": "api", "command_template": "via Replicate MCP/API", "timeout_s": 120 },
+          "artifact": { "type": "url", "format": "png|webp", "delivery": "download-required" },
+          "cost": { "pool": "replicate-dollars", "est_per_call": "per-image billing", "confidence": "exact" },
+          "score": {
+            "overall": 3.4,
+            "dims": {},
+            "suite": "seeded:gabooja-labs/quality_gate/calibration",
+            "date": "2026-06-15",
+            "source": "seeded",
+            "notes": "Ties recraft-v4 (3.40) and BEATS the newer flux-2-pro (2.60) — newest is not best. Strong at mascot/character craft and pixel-art."
+          },
+          "gotchas": ["route text-heavy work to Ideogram or GPT Image 2 instead"]
+        },
+        {
+          "id": "replicate/ideogram-v3",
+          "skill": null,
+          "invocation": { "type": "api", "command_template": "via Replicate MCP/API", "timeout_s": 120 },
+          "artifact": { "type": "url", "format": "png", "delivery": "download-required" },
+          "cost": { "pool": "replicate-dollars", "est_per_call": "per-image billing", "confidence": "exact" },
+          "score": {
+            "overall": 3.98,
+            "dims": {},
+            "suite": "seeded:gabooja-labs/experiments/020-gpt-image-2-eval",
+            "date": "2026-07-01",
+            "source": "seeded",
+            "notes": "The exact-typography specialist: renders kerning literally where GPT Image 2 editorializes glyphs. First choice for logos/wordmarks. Validated only after a shootout reversal (recraft-v4 had catastrophic variance on text)."
+          },
+          "gotchas": []
+        },
+        {
+          "id": "magnific/seedream-4.5",
+          "skill": null,
+          "invocation": { "type": "web-ui", "command_template": "Magnific/Freepik web UI — NOT routable headlessly; MCP path is credit-metered even with UI Unlimited", "timeout_s": null },
+          "artifact": { "type": "file", "format": "png (4K)", "delivery": "manual-download" },
+          "cost": { "pool": "magnific", "est_per_call": "flat with UI Unlimited (verify visible)", "confidence": "estimated" },
+          "score": {
+            "overall": null,
+            "dims": {},
+            "suite": "seeded:experiments/PROVIDER_MATRIX",
+            "date": "2026-07-10",
+            "source": "seeded",
+            "notes": "Primary fashion/editorial path at 4K with character-reference transfer. Recorded for honesty; unroutable by agents."
+          },
+          "gotchas": [
+            "UI state drifts after reload — verify references and aspect ratio",
+            "back/side product angles hallucinate construction details",
+            "duplicated subjects in over-shoulder/back prompts"
+          ]
+        }
+      ]
+    },
+    "image-edit": {
+      "description": "Reference-driven edits of an existing image: same identity/product, new scene or angle.",
+      "providers": [
+        {
+          "id": "grok/image_edit",
+          "skill": "skills/video-gen-grok",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "grok --always-approve --single \"<edit instruction, reference image attached>\"",
+            "timeout_s": 120
+          },
+          "artifact": { "type": "file", "format": "png (~1MP ceiling)", "delivery": "path" },
+          "cost": { "pool": "grok", "est_per_call": "flat subscription", "confidence": "estimated" },
+          "score": {
+            "overall": 4.7,
+            "dims": { "product_fidelity": 4.7, "model_likeness": 4.0 },
+            "suite": "seeded:experiments/grok-kling-benchmark-2026-07-10",
+            "date": "2026-07-10",
+            "source": "seeded",
+            "notes": "Standout: clean back-detail angles — the exact angle class where Seedream hallucinates. 14-39s per call."
+          },
+          "gotchas": [
+            "~1MP output ceiling — upscale pass for anything larger",
+            "moderation is NON-DETERMINISTIC: identical prompt can pass then block; one retry then reroute",
+            "grok image_gen (not edit) takes NO reference input — disqualified for identity work"
+          ]
+        }
+      ]
+    },
+    "image-to-video": {
+      "description": "Animate a start frame into a short clip.",
+      "providers": [
+        {
+          "id": "grok/image_to_video",
+          "skill": "skills/video-gen-grok",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "grok --always-approve --single \"<motion prompt, start frame attached>\"",
+            "timeout_s": 180
+          },
+          "artifact": { "type": "file", "format": "mp4 (6s, 448-672px)", "delivery": "path" },
+          "cost": { "pool": "grok", "est_per_call": "flat subscription", "confidence": "estimated" },
+          "score": {
+            "overall": 3.5,
+            "dims": { "motion_direction": 4.5, "resolution": 2.0 },
+            "suite": "seeded:experiments/grok-kling-benchmark-2026-07-10",
+            "date": "2026-07-10",
+            "source": "seeded",
+            "notes": "Motion-direction-following competitive with Kling (push-in/turn/orbit/walk all read correctly). The previz / high-volume low-stakes lane."
+          },
+          "gotchas": [
+            "448-672px output — previz only, not client-facing",
+            "moderation non-deterministic, ~1 in 6-8 calls blocked (domestic framing + flash/minimal-garment combos)"
+          ]
+        },
+        {
+          "id": "kling/3.0-web",
+          "skill": null,
+          "invocation": { "type": "web-ui", "command_template": "Kling web UI — NOT routable headlessly", "timeout_s": null },
+          "artifact": { "type": "file", "format": "mp4 (1080p-4K, 5-15s)", "delivery": "manual-download" },
+          "cost": { "pool": "kling-credits", "est_per_call": "150cr (4K/5s tier)", "confidence": "exact" },
+          "score": {
+            "overall": 4.8,
+            "dims": { "realism": 5.0, "temporal_identity": 5.0 },
+            "suite": "seeded:experiments/grok-kling-benchmark-2026-07-10",
+            "date": "2026-07-10",
+            "source": "seeded",
+            "notes": "Won every scored matched pair vs Grok i2v. 4K/5s tier produced a clean 5/5 hero clip. The production lane when resolution matters."
+          },
+          "gotchas": [
+            "start-frame upload RACE CONDITION: verify the submitted card's thumbnail before generating at premium tiers (a 900cr job rendered pure t2v, zero start-frame connection)",
+            "4K/15s tier showed no quality gain over 4K/5s — duration-only upgrade",
+            "moderation non-deterministic (credits refunded on hard blocks)"
+          ]
+        }
+      ]
+    },
+    "code-recon": {
+      "description": "Read-only codebase/web investigation: diagnosis, root-cause chains, cited research.",
+      "providers": [
+        {
+          "id": "codex/gpt-5.5-exec",
+          "skill": "skills/recon-codex",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "codex exec -C <dir> -s read-only --ephemeral -o out.txt - < brief.md",
+            "timeout_s": 900
+          },
+          "artifact": { "type": "file", "format": "text|json (--output-schema forces JSON)", "delivery": "path" },
+          "cost": { "pool": "codex", "est_per_call": "~10k tokens minimum per exec — batch questions", "confidence": "estimated" },
+          "score": {
+            "overall": 4.5,
+            "dims": { "structural_analysis": 5.0, "literal_constants": 3.0, "negative_claims": 2.0 },
+            "suite": "seeded:codex-delegation lessons 2026-07",
+            "date": "2026-07-08",
+            "source": "seeded",
+            "notes": "Recon at xhigh effort is excellent (correct root-cause chains with accurate file:line refs; detects already-fixed bugs). Web research: ~1 factual error per 40 citations."
+          },
+          "gotchas": [
+            "literal constants are the weak spot — verify every number at file:line",
+            "NEGATIVE claims ('X does not exist') get ZERO trust until the caller probes obvious candidates",
+            "per-exec overhead ~10k tokens — never use for one-liners, batch into one session"
+          ]
+        }
+      ]
+    },
+    "code-implementation": {
+      "description": "Delegated implementation: typing out well-briefed changes in an isolated worktree.",
+      "providers": [
+        {
+          "id": "codex/gpt-5.5-worktree",
+          "skill": "skills/recon-codex",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "skills/recon-codex/scripts/codex-task.sh start <branch> <brief.md>",
+            "timeout_s": 1800
+          },
+          "artifact": { "type": "job-id", "format": "git worktree + branch; caller reviews diff and merges", "delivery": "worktree" },
+          "cost": { "pool": "codex", "est_per_call": "medium", "confidence": "estimated" },
+          "score": {
+            "overall": 4.3,
+            "dims": { "first_shot_green_rate": 4.5, "test_quality": 4.0 },
+            "suite": "seeded:codex-delegation lessons 2026-07",
+            "date": "2026-07-08",
+            "source": "seeded",
+            "notes": "6/6 packages first-shot green with strong tests in the best wave. Review is NEVER delegated: read the full diff, run gates yourself."
+          },
+          "gotchas": [
+            "worktrees branch from ORIGIN/main — local-only commits are invisible to it; push or copy files first",
+            "sandbox can leave .git read-only — Codex does file work, caller does ALL git index/commit work",
+            "changed exported signatures: audit ALL call sites, it silently truncated two once",
+            "inline exact literal values and a SAMPLE of any data file into the brief — it assumed a flat shape for a nested JSON it never sampled"
+          ]
+        }
+      ]
+    },
+    "long-context-multimodal": {
+      "description": "Tasks needing very large context windows or native audio/video/PDF input.",
+      "providers": [
+        {
+          "id": "gemini/cli",
+          "skill": "skills/longcontext-gemini",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "gemini -p \"<prompt>\" (see skill for file-attachment patterns)",
+            "timeout_s": 600
+          },
+          "artifact": { "type": "file", "format": "text on stdout — caller redirects", "delivery": "stdout" },
+          "cost": { "pool": "gemini", "est_per_call": "low", "confidence": "estimated" },
+          "score": {
+            "overall": null,
+            "dims": {},
+            "suite": null,
+            "date": null,
+            "source": "unbenchmarked",
+            "notes": "UNBENCHMARKED — drafted lane. First candidate for a pack-run suite (longcontext-v1)."
+          },
+          "gotchas": ["skill is a draft: verify invocation flags against the installed gemini CLI version before relying on it"]
+        }
+      ]
+    }
+  }
+}
