@@ -16,7 +16,9 @@ roadmap; until then these windows + judgment are the affordability check).
 - Limits: subscription quota has **no headless readout** (the TUI `/status`
   screen is interactive-only; an upstream issue tracks exposing it). Treat
   remaining quota as unknown-but-large until calls start failing; the image
-  runner's exit code 2 = hard rate limit / credits exhausted.
+  runner signals hard rate limit / credits exhausted with exit code 2 in
+  batch (--jobs) mode; single-image mode exits 1 on every failure — read the
+  error text.
 
 ## Grok CLI (`image-edit`, `image-to-video`)
 

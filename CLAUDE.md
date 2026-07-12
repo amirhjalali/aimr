@@ -67,7 +67,8 @@ tests/                    registry honesty checks (run in CI).
 - **No pixel-quality metrics in benchmarks** — empirically r≈0.08 vs human
   preference. Vision-LLM judging only.
 - New lanes follow `CONTRIBUTING.md`; references carry gotchas earned from
-  real runs (a gotcha-free lane is marked DRAFT).
+  real runs (a gotcha-free CLI/subagent lane is marked DRAFT via
+  `source: "unbenchmarked"`; third-party API entries may be gotcha-free).
 - Scripts stay stdlib-only, `from __future__ import annotations`, argparse,
   timeouts on all subprocess calls.
 - The usage manager (probe-first quota awareness + statusline) is a ROADMAP

@@ -8,7 +8,9 @@ description: "AIMR (AI Model Router): route any capability request — generate 
 This skill turns `registry.json` into a decision procedure. The registry has two
 parts: `models` (the cost catalog: quota-draw weights for subscription pools,
 API $/MTok where metered, effort levels) and `capabilities` (ranked providers,
-each with invocation/artifact/cost/score contracts).
+each with invocation/artifact/cost/score contracts). `<skill-dir>` in any
+command template means this skill's own directory (the one containing this
+file), wherever it is installed — resolve it before dispatching.
 
 ## The procedure
 
@@ -105,7 +107,7 @@ re-pays the full context write and can erase the cheap-lane advantage.
 | Failure | Signal | Action |
 |---|---|---|
 | Moderation block | provider-specific (Grok: actionable refusal text; GPT Image 2: `stream disconnected` on named artists) | Rewrite per guidance. One unchanged retry max (moderation is non-deterministic on Grok/Kling). Then reroute. Never batch-retry unmodified. |
-| Hard rate limit / credits | e.g. image runner exit code 2 | Stop the lane, fall to next provider. Do not spin. |
+| Hard rate limit / credits | image runner exit code 2 in batch (`--jobs`) mode; in single-image mode every failure exits 1 — read the error text to distinguish | Stop the lane, fall to next provider. Do not spin. |
 | Timeout | runner kill | **Check for a completed artifact before rerunning** — "timed-out" runs have repeatedly turned out to have finished. |
 | Auth | login-status probe fails (see references/setup.md) | Surface to the human. Do not retry around auth. |
 | Empty/wrong artifact | contract check fails | One retry with the same brief; then treat as a brief/prompt bug, not a transport bug. |

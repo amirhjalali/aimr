@@ -26,10 +26,13 @@ Bundled so none of this has to be re-derived: `../scripts/codex_image_gen.py`
 
 ## Quick start
 
+`<skill-dir>` = this skill's install directory (the one containing
+SKILL.md); resolve it before running.
+
 Single image:
 
 ```bash
-python skills/aimr/scripts/codex_image_gen.py \
+python3 <skill-dir>/scripts/codex_image_gen.py \
   --prompt "Vintage badge: a fox in a ranger hat, muted 3-color palette. \
 Format: square 1:1, centered, isolated graphic." \
   --out ./fox.png
@@ -38,7 +41,7 @@ Format: square 1:1, centered, isolated graphic." \
 With reference image(s) for style/character anchoring:
 
 ```bash
-python skills/aimr/scripts/codex_image_gen.py --prompt "..." --out ./out.png \
+python3 <skill-dir>/scripts/codex_image_gen.py --prompt "..." --out ./out.png \
   --ref ./character_sheet.png --size 1536x1024
 ```
 
@@ -46,13 +49,14 @@ Batch, parallel, from a JSON job file
 (`[{"id","prompt","out","refs","size"}, ...]`):
 
 ```bash
-python skills/aimr/scripts/codex_image_gen.py --jobs jobs.json --workers 8 --log run_log.json
+python3 <skill-dir>/scripts/codex_image_gen.py --jobs jobs.json --workers 8 --log run_log.json
 ```
 
 The runner already encodes the operational discipline: correct `codex exec`
 argv, per-job workdir isolation, `-o last.txt` result parsing, 8-way-safe
 concurrency, process-group timeout kills, and HARD/SOFT rate-limit
-classification (exit code 2 when credits are exhausted). Prefer patching it
+classification (batch mode exits 2 when credits are exhausted; single-image
+mode exits 1 on every failure — read the error text). Prefer patching it
 over rewriting a runner. Run it from a scratch directory or it litters
 `codex_img_workdirs/` into the cwd.
 
@@ -81,7 +85,8 @@ over rewriting a runner. Run it from a scratch directory or it litters
   literally; GPT Image 2 editorializes glyphs).
 - **Mascot/character craft, pixel-art →** Flux (note: flux-1.1-pro
   outbenchmarks the newer flux-2-pro — check scores, don't assume newest).
-- **Native vector / SVG →** Recraft (GPT Image 2 is raster-only).
+- **Native vector / SVG →** Recraft (GPT Image 2 is raster-only; Recraft is
+  not currently a registry lane — treat as a human-driven option).
 - **Reference-driven edit of an existing image →** `image-edit` lane (Grok
   `image_edit` — see `video.md`).
 

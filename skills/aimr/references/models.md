@@ -9,8 +9,10 @@ dispatch at all.
 
 On subscription pools, marginal dollars are a fiction — the real currency is
 **quota pressure** on the shared account. Weights are relative draw per token
-(for the Claude family they also equal the literal $/MTok input ratio, and the
-output ratio is identical):
+(for the Claude family they track the standard $/MTok price ratios — though
+not always literally: sonnet-5's intro pricing is $2 in until 2026-08-31
+while its weight stays 3; the registry's api_per_mtok fields are the
+authoritative numbers):
 
 | Model | Weight | Lane |
 |---|---|---|

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Codex-as-executor harness (portable): run a Codex CLI task in an isolated
-# git worktree of WHATEVER repo you invoke it from. Bundled with the
-# codex-delegation skill; a repo may carry its own tuned copy (gabooja:
-# scripts/agents/codex-task.sh).
+# git worktree of WHATEVER repo you invoke it from. Bundled with the AIMR
+# skill (code-implementation lane); a repo may carry its own tuned copy.
 #
 # Usage (run from anywhere inside the target repo):
 #   codex-task.sh start <branch> <brief-file> [extra codex exec args...]
@@ -11,7 +10,9 @@
 #   codex-task.sh clean <branch>
 #
 # Env: CODEX_WT_ROOT overrides the worktree parent dir;
-#      CODEX_SKIP_INSTALL=1 skips dependency install.
+#      CODEX_SKIP_INSTALL=1 skips dependency install;
+#      CODEX_TIMEOUT_S bounds the codex exec run (default 1800, matching the
+#      registry's timeout_s contract; 0 disables).
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -44,9 +45,31 @@ case "$cmd" in
     git -C "$REPO_ROOT" rev-parse --verify origin/main >/dev/null 2>&1 && base="origin/main"
     git -C "$REPO_ROOT" worktree add -b "$branch" "$dir" "$base"
     (cd "$dir" && install_deps)
-    codex exec -C "$dir" -s workspace-write \
-      --output-last-message "$dir/.codex-last.txt" \
-      "$@" - <"$brief"
+    # Bounded run: SIGTERM at the deadline, SIGKILL 30s later. A killed run
+    # may still have finished its file work — check the worktree before
+    # rerunning (see the timeout row in SKILL.md's failure table).
+    timeout_s="${CODEX_TIMEOUT_S:-1800}"
+    if [ "$timeout_s" = "0" ]; then
+      codex exec -C "$dir" -s workspace-write \
+        --output-last-message "$dir/.codex-last.txt" \
+        "$@" - <"$brief"
+    else
+      codex exec -C "$dir" -s workspace-write \
+        --output-last-message "$dir/.codex-last.txt" \
+        "$@" - <"$brief" &
+      codex_pid=$!
+      (
+        sleep "$timeout_s" && kill -TERM "$codex_pid" 2>/dev/null &&
+          sleep 30 && kill -KILL "$codex_pid" 2>/dev/null
+      ) &
+      watchdog_pid=$!
+      set +e; wait "$codex_pid"; codex_rc=$?; set -e
+      kill "$watchdog_pid" 2>/dev/null || true
+      wait "$watchdog_pid" 2>/dev/null || true
+      if [ "$codex_rc" -ne 0 ]; then
+        echo "codex exec exited $codex_rc (timeout after ${timeout_s}s sends TERM)" >&2
+      fi
+    fi
     echo
     echo "=== codex last message ==="
     cat "$dir/.codex-last.txt"

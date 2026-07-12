@@ -1,5 +1,5 @@
 {
-  "$schema_note": "AIMR (AI Model Router) capability registry v2. Top-level `models` is the submodel catalog: cost data (API $/MTok where metered, quota-draw weight where subscription), effort levels, and when-to-use. Capabilities rank `providers` best-first; each provider carries four contracts: invocation (how to call), artifact (what comes back), cost (which account pool it draws), score (benchmarked, dated, auditable to a named suite — or explicitly unbenchmarked/seeded, never invented). LLM-backed providers reference a `models` entry via `model` (+ `effort`); media providers are their own model. `human_options` lists quality-winning providers agents cannot drive — surfaced to humans, never routed. Every cost number carries source + confidence; null means unknown, not zero.",
+  "$schema_note": "AIMR (AI Model Router) capability registry v2. Top-level `models` is the submodel catalog: cost data (API $/MTok where metered, quota-draw weight where subscription), effort levels, and when-to-use. Capabilities rank `providers` best-first; each provider carries four contracts: invocation (how to call), artifact (what comes back: `type` is the terminal artifact class — file|url|worktree — and `delivery` is what work remains after the provider returns: path|download-required|stdout|worktree-review), cost (which account pool it draws), score (benchmarked, dated, auditable to a named suite — or explicitly unbenchmarked/seeded, never invented). `<skill-dir>` in command templates means the directory containing this registry, wherever the skill is installed. LLM-backed providers reference a `models` entry via `model` (+ `effort`); media providers are their own model. `human_options` lists quality-winning providers agents cannot drive — surfaced to humans, never routed; their scores follow the same auditability rules. Every cost number carries source + confidence; null means unknown, not zero.",
   "version": 2,
   "updated": "2026-07-12",
   "scale": "scores are 0-5, anchored rubrics (see benchmarks/)",
@@ -79,8 +79,8 @@
           "reference": "references/image-gen.md",
           "invocation": {
             "type": "headless-cli",
-            "command_template": "python skills/aimr/scripts/codex_image_gen.py --prompt \"...\" --out out.png [--ref ref.png] [--size 1536x1024]",
-            "timeout_s": 300
+            "command_template": "python3 <skill-dir>/scripts/codex_image_gen.py --prompt \"...\" --out out.png [--ref ref.png] [--size 1536x1024]",
+            "timeout_s": 1500
           },
           "artifact": { "type": "file", "format": "png", "delivery": "path" },
           "cost": { "pool": "codex-sub", "est_per_call": "low", "confidence": "estimated" },
@@ -138,8 +138,14 @@
         {
           "id": "magnific/seedream-4.5",
           "notes": "Primary fashion/editorial path at 4K with character-reference transfer. Magnific/Freepik web UI — not routable headlessly; MCP path is credit-metered even with UI Unlimited. UI state drifts after reload (verify references and aspect ratio); back/side product angles hallucinate construction details; duplicated subjects in over-shoulder/back prompts.",
-          "suite": "seeded:experiments/PROVIDER_MATRIX",
-          "date": "2026-07-10"
+          "cost": { "pool": "magnific", "est_per_call": "flat with UI Unlimited (verify visible)", "confidence": "estimated" },
+          "score": {
+            "overall": null,
+            "dims": {},
+            "suite": "seeded:experiments/PROVIDER_MATRIX",
+            "date": "2026-07-10",
+            "source": "seeded"
+          }
         }
       ]
     },
@@ -205,8 +211,14 @@
         {
           "id": "kling/3.0-web",
           "notes": "The production lane when resolution matters: won every scored matched pair vs Grok i2v; 4K/5s tier (150cr) produced a clean 5/5 hero clip. Web UI only. Start-frame upload RACE CONDITION: verify the submitted card's thumbnail before generating at premium tiers (a 900cr job once rendered pure t2v). 4K/15s tier is a duration-only upgrade. Moderation non-deterministic (credits refunded on hard blocks).",
-          "suite": "seeded:experiments/grok-kling-benchmark-2026-07-10",
-          "date": "2026-07-10"
+          "cost": { "pool": "kling-credits", "est_per_call": "150cr (4K/5s tier)", "confidence": "exact" },
+          "score": {
+            "overall": 4.8,
+            "dims": { "realism": 5.0, "temporal_identity": 5.0 },
+            "suite": "seeded:experiments/grok-kling-benchmark-2026-07-10",
+            "date": "2026-07-10",
+            "source": "seeded"
+          }
         }
       ]
     },
@@ -320,10 +332,10 @@
           "reference": "references/recon.md",
           "invocation": {
             "type": "headless-cli",
-            "command_template": "skills/aimr/scripts/codex-task.sh start <branch> <brief.md> -m gpt-5.5",
+            "command_template": "<skill-dir>/scripts/codex-task.sh start <branch> <brief.md> -m gpt-5.5",
             "timeout_s": 1800
           },
-          "artifact": { "type": "job-id", "format": "git worktree + branch; caller reviews diff and merges", "delivery": "worktree" },
+          "artifact": { "type": "worktree", "format": "git worktree + branch; caller reviews diff and merges", "delivery": "worktree-review" },
           "cost": { "pool": "codex-sub", "est_per_call": "medium", "confidence": "estimated" },
           "score": {
             "overall": 4.3,

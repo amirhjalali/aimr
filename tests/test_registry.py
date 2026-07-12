@@ -149,6 +149,25 @@ def test_human_options_are_not_routable(cap, option):
     assert option.get("notes"), "human options need honest notes"
 
 
+@pytest.mark.parametrize("cap,option", HUMAN_OPTIONS, ids=HUMAN_IDS)
+def test_human_options_stay_auditable(cap, option):
+    """Human options carry quality claims agents surface to humans — the same
+    score/cost honesty rules apply as for routable providers."""
+    score = option.get("score")
+    assert score is not None, f"{option['id']} needs a score block (null overall ok)"
+    if score.get("overall") is None:
+        assert score.get("source") in ("unbenchmarked", "seeded"), \
+            "null scores must declare why"
+    else:
+        assert score.get("suite") and score.get("date"), \
+            f"{option['id']}: a number without suite+date is not auditable"
+        assert 0 <= score["overall"] <= 5
+    cost = option.get("cost")
+    assert cost is not None, f"{option['id']} needs a cost block"
+    assert cost.get("pool")
+    assert cost.get("confidence") in ("exact", "estimated")
+
+
 # ----------------------------------------------------------------- models
 
 @pytest.mark.parametrize("model_id", list(MODELS), ids=list(MODELS))
@@ -192,6 +211,19 @@ def test_provider_pools_match_model_pools():
 def test_benchmark_methodology_docs_exist():
     for f in ("README.md", "image-gen-v1/rubric.md", "image-gen-v1/judge_prompt.md"):
         assert (ROOT / "benchmarks" / f).exists(), f"benchmarks/{f} missing"
+
+
+def test_benchmark_suite_files_valid():
+    """Published suites are immutable: the task set stays committed and valid
+    even while the runner machinery is absent."""
+    tasks = json.loads((ROOT / "benchmarks" / "image-gen-v1" / "tasks.json").read_text())
+    assert tasks["suite"] == "image-gen-v1"
+    ids = [t["id"] for t in tasks["tasks"]]
+    assert len(ids) == len(set(ids)), "duplicate task ids"
+    assert len(ids) >= 10
+    for t in tasks["tasks"]:
+        assert t["prompt"] and t["archetype"] and t["size"]
+        assert len(t["prompt"].split()) <= 150, f"{t['id']} prompt exceeds 150 words"
 
 
 def test_skill_entrypoint_exists():

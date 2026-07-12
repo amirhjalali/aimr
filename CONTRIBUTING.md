@@ -24,9 +24,10 @@ artifact, and know what it cost, using only what's in this repo.
 
 3. **Write the reference file** (`skills/aimr/references/<lane>.md`):
    - The exact invocation, copy-pasteable.
-   - Gotchas as non-negotiables, each earned from a real failure. A lane with
-     no gotchas hasn't been used yet — say so (mark it DRAFT like
-     `longcontext.md`).
+   - Gotchas as non-negotiables, each earned from a real failure. A
+     CLI/subagent lane with no gotchas hasn't been used yet — say so (mark it
+     DRAFT like `longcontext.md`; third-party API entries without a reference
+     file may be gotcha-free).
    - Routing boundaries: what should NOT come here, and where it goes instead.
    - Bundle any runner script under `skills/aimr/scripts/` — stdlib Python or
      plain bash, `from __future__ import annotations`, argparse, timeouts on

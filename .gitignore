@@ -4,6 +4,12 @@ __pycache__/
 *.log
 .pytest_cache/
 
+# v1 user-local budget state — never commit spend data or caps. The budget
+# tool was removed in 2.0, but upgraders' untracked local files survive a
+# pull and must stay unstageable.
+budget/budget.json
+budget/ledger.jsonl
+
 # benchmark run outputs (manifests + artifacts); suites themselves are committed
 benchmarks/**/runs/
 runs/

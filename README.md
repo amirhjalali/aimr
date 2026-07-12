@@ -66,7 +66,7 @@ harness) are stdlib-only and used by their lanes when dispatched.
 |---|---|---|---|
 | image-generation | Codex / GPT Image 2 | 4.97 (seeded, 20-archetype eval) | text-in-scene, POD, style fusion; ~119s/img |
 | image-edit | Grok `image_edit` | 4.7 (seeded, 2026-07-10) | wins the hard back-angle class |
-| image-to-video | Grok `image_to_video` | 3.5 previz (seeded) | hero clips: Kling 4.8, human-driven |
+| image-to-video | Grok `image_to_video` | 3.5 previz (seeded) | hero clips: Kling 4.8 (seeded), human-driven |
 | code-recon | Codex `exec` @ xhigh | 4.5 (seeded) | verify constants; distrust negative claims |
 | web-research | Codex `exec` + web search | unscored, seeded findings | ~1 error / 40 citations; probe negatives |
 | code-implementation | Codex + worktree harness | 4.3 (seeded) | review is never delegated |

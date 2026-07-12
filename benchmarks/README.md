@@ -4,15 +4,15 @@ Suites keep `registry.json` honest. A ranking in the registry is only as good
 as the suite, rubric, and date attached to it — that's what makes it
 auditable.
 
-**Current state (v2.0):** this directory holds the *methodology* — the
-anchored rubric and judge prompt for `image-gen-v1` — but no suite runner.
+**Current state (v2.0):** this directory holds the published `image-gen-v1`
+suite definition (tasks, anchored rubric, judge prompt) but no suite runner.
 Every score in the registry today is `seeded` (imported from a named prior
 study) or `unbenchmarked` (`overall: null`). The runner machinery returns in
 v2.2 when the first pack-run suite actually executes (`web-research-v1` or
-`longcontext-v1` are the leading candidates — the gemini lane is the only
-fully unbenchmarked routable lane). Committing scaffolding ahead of a real
-run was cut deliberately: the honesty *rules* matter; unexercised machinery
-doesn't.
+`longcontext-v1` are the leading candidates — the gemini lane and the
+claude-subagent lanes are all unbenchmarked). Committing runner scaffolding
+ahead of a real run was cut deliberately: the honesty *rules* and the
+immutable suite definitions matter; unexercised machinery doesn't.
 
 ## Methodology (fixed across suites)
 
