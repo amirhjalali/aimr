@@ -2,11 +2,11 @@ __pycache__/
 *.pyc
 .DS_Store
 *.log
-
-# user-local budget state — never commit spend data or caps
-budget/budget.json
-budget/ledger.jsonl
+.pytest_cache/
 
 # benchmark run outputs (manifests + artifacts); suites themselves are committed
 benchmarks/**/runs/
 runs/
+
+# image-runner scratch dirs if a lane is run from the repo
+codex_img_workdirs/

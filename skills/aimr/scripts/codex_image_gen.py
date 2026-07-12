@@ -6,7 +6,7 @@ Generates images by asking a `codex exec` agent to call its built-in image tool
 with the phrase "GPT Image 2.0", then harvesting the resulting PNG.
 
 This single file encodes the operational lessons distilled from ~15 experiments'
-worth of Codex-CLI image runs (see references/lessons.md). Do not re-derive them;
+worth of Codex-CLI image runs (see ../references/image-gen-lessons.md). Do not re-derive them;
 patch this script instead.
 
 Prerequisites
