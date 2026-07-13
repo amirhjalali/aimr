@@ -20,7 +20,7 @@ roadmap; until then these windows + judgment are the affordability check).
   batch (--jobs) mode; single-image mode exits 1 on every failure — read the
   error text.
 
-## Grok CLI (`image-edit`, `image-to-video`)
+## Grok CLI (`image-to-video`)
 
 - Auth: grok.com subscription session; generation is flat-cost (no per-call
   metering observed).
@@ -62,8 +62,9 @@ roadmap; until then these windows + judgment are the affordability check).
 
 ## Web-UI providers (`human_options` — recorded, not routable)
 
-Magnific/Seedream and Kling 3.0 appear in the registry's `human_options` for
-honesty — they win lanes on quality but have no scriptable path. The routing
-skill surfaces them to the human instead of driving them. If they ship a
-headless path, they get a provider entry and a suite run like any other
-candidate.
+The registry currently lists no `human_options`: web-UI-only tools
+(Kling 3.0, Magnific/Seedream) were descoped 2026-07-13 along with
+third-party image APIs — AIMR's scope is agent-drivable CLIs. The mechanism
+stays: a quality-winning tool with no scriptable path can be recorded as a
+`human_option` (never routed), and if it ships a headless path it gets a
+provider entry and a suite run like any other candidate.

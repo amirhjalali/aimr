@@ -1,6 +1,6 @@
 ---
 name: aimr
-description: "AIMR (AI Model Router): route any capability request — generate an image, edit a reference shot, animate a frame, recon a codebase, research the web, delegate implementation, get a second-opinion review, digest bulk material — to the best specialist model/CLI you can afford right now. Use BEFORE picking a tool, model, or effort level for generation or delegation work: read registry.json for ranked providers and the models cost table, load the winning lane's reference file, and follow the handoff-failure policy when a provider blocks, times out, or rate-limits."
+description: "AIMR (AI Model Router): route any capability request — generate an image, animate a frame, recon a codebase, research the web, delegate implementation, get a second-opinion review, digest bulk material — to the best specialist model/CLI you can afford right now. Use BEFORE picking a tool, model, or effort level for generation or delegation work: read registry.json for ranked providers and the models cost table, load the winning lane's reference file, and follow the handoff-failure policy when a provider blocks, times out, or rate-limits."
 ---
 
 # AIMR — aim agent work at the best model you can afford
@@ -15,13 +15,10 @@ file), wherever it is installed — resolve it before dispatching.
 ## The procedure
 
 1. **Name the capability.** Map the request onto a registry key:
-   `image-generation` (from-scratch), `image-edit` (reference-driven, same
-   identity/product), `image-to-video`, `code-recon`, `web-research`,
+   `image-generation`, `image-to-video`, `code-recon`, `web-research`,
    `code-implementation`, `review-second-opinion`, `long-context-multimodal`.
-   Two distinctions matter: from-scratch vs reference-driven (providers that win
-   one are disqualified from the other — Grok `image_gen` takes no reference
-   input at all), and codebase recon vs web research (different failure modes:
-   literal constants vs citation accuracy).
+   One distinction matters: codebase recon vs web research (different failure
+   modes: literal constants vs citation accuracy).
 
 2. **Decide whether to delegate at all.** Delegation has a roughly fixed
    coordination cost per handoff: every boundary token is billed at least twice
@@ -95,9 +92,10 @@ re-pays the full context write and can erase the cheap-lane advantage.
   pack-run suite; `seeded` scores are real findings but predate this pack's
   suites; `overall: null` + `source: "unbenchmarked"` is a draft lane — usable,
   but probe with one cheap call before batch work.
-- **Newest ≠ best** is an empirical rule here (flux-1.1-pro outbenchmarks
-  flux-2-pro; gpt-5.5 beat the newer CLI-default model in a side-by-side
-  audition). Never override the ranking because a provider sounds newer.
+- **Newest ≠ best** is an empirical rule here (gpt-5.5 beat the newer
+  CLI-default model in a side-by-side audition; the retired image-lane evals
+  showed the same pattern). Never override the ranking because a provider
+  sounds newer.
 - Trust calibration for anything delegated: literal constants are unverified
   until checked at source; negative claims ("X doesn't exist") require active
   probing by the caller; honest failure reports usually mean a brief bug.
@@ -106,7 +104,7 @@ re-pays the full context write and can erase the cheap-lane advantage.
 
 | Failure | Signal | Action |
 |---|---|---|
-| Moderation block | provider-specific (Grok: actionable refusal text; GPT Image 2: `stream disconnected` on named artists) | Rewrite per guidance. One unchanged retry max (moderation is non-deterministic on Grok/Kling). Then reroute. Never batch-retry unmodified. |
+| Moderation block | provider-specific (Grok: actionable refusal text; GPT Image 2: `stream disconnected` on named artists) | Rewrite per guidance. One unchanged retry max (moderation is non-deterministic on Grok). Then reroute. Never batch-retry unmodified. |
 | Hard rate limit / credits | image runner exit code 2 in batch (`--jobs`) mode; in single-image mode every failure exits 1 — read the error text to distinguish | Stop the lane, fall to next provider. Do not spin. |
 | Timeout | runner kill | **Check for a completed artifact before rerunning** — "timed-out" runs have repeatedly turned out to have finished. |
 | Auth | login-status probe fails (see references/setup.md) | Surface to the human. Do not retry around auth. |
@@ -126,7 +124,7 @@ clip).
 | File | When to load |
 |---|---|
 | `references/image-gen.md` | routed to `codex/gpt-image-2` (+ `image-gen-lessons.md` for prompt craft) |
-| `references/video.md` | routed to Grok `image_edit` / `image_to_video` |
+| `references/video.md` | routed to Grok `image_to_video` |
 | `references/recon.md` | routed to any Codex lane (recon, web research, implementation) |
 | `references/longcontext.md` | routed to `gemini/cli` (DRAFT lane) |
 | `references/models.md` | picking a Claude tier or an effort level |

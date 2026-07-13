@@ -79,16 +79,18 @@ over rewriting a runner. Run it from a scratch directory or it litters
    PNG; for multi-panel coherence use one-master-crop or a 3D bake, not
    reference chaining.
 
-## Route elsewhere when (check registry.json for current rankings)
+## Known weak spots (no routable alternative in the current registry)
 
-- **Exact typography / logos / wordmarks →** Ideogram (renders kerning
-  literally; GPT Image 2 editorializes glyphs).
-- **Mascot/character craft, pixel-art →** Flux (note: flux-1.1-pro
-  outbenchmarks the newer flux-2-pro — check scores, don't assume newest).
-- **Native vector / SVG →** Recraft (GPT Image 2 is raster-only; Recraft is
-  not currently a registry lane — treat as a human-driven option).
-- **Reference-driven edit of an existing image →** `image-edit` lane (Grok
-  `image_edit` — see `video.md`).
+GPT Image 2 is the only routed image-generation lane; when a job hits one of
+its documented failure edges, tell the human instead of forcing the lane:
+
+- **Exact typography / logos / wordmarks** — it editorializes glyphs (the
+  seeded eval's typography specialist, Ideogram v3 at 3.98, was descoped
+  2026-07-13; a human can still drive it or a similar tool directly).
+- **Native vector / SVG** — it is raster-only.
+- **Reference-driven edits of an existing image** — the former `image-edit`
+  lane was descoped 2026-07-13; a reference PNG passed via `--ref` gets you
+  style/identity anchoring on a *new* generation, not an edit.
 
 ## When something breaks
 

@@ -23,9 +23,9 @@ flowchart LR
 
 ## What you get
 
-- **One skill, eight capabilities** — image generation, reference edits,
-  image-to-video, code recon, web research, delegated implementation,
-  second-opinion review, long-context/multimodal reading. Each capability
+- **One skill, seven capabilities** — image generation, image-to-video,
+  code recon, web research, delegated implementation, second-opinion review,
+  long-context/multimodal reading. Each capability
   ranks its providers best-first with four contracts: how to invoke, what
   comes back, what it costs, and the benchmarked score that earned the rank.
 - **A model cost catalog** — submodels (fable/opus/sonnet/haiku, gpt-5.5,
@@ -65,8 +65,7 @@ harness) are stdlib-only and used by their lanes when dispatched.
 | Capability | Best routable | Score (source) | Notes |
 |---|---|---|---|
 | image-generation | Codex / GPT Image 2 | 4.97 (seeded, 20-archetype eval) | text-in-scene, POD, style fusion; ~119s/img |
-| image-edit | Grok `image_edit` | 4.7 (seeded, 2026-07-10) | wins the hard back-angle class |
-| image-to-video | Grok `image_to_video` | 3.5 previz (seeded) | hero clips: Kling 4.8 (seeded), human-driven |
+| image-to-video | Grok `image_to_video` | 3.5 previz (seeded) | previz only (448–672px); no production lane routed |
 | code-recon | Codex `exec` @ xhigh | 4.5 (seeded) | verify constants; distrust negative claims |
 | web-research | Codex `exec` + web search | unscored, seeded findings | ~1 error / 40 citations; probe negatives |
 | code-implementation | Codex + worktree harness | 4.3 (seeded) | review is never delegated |
@@ -80,13 +79,13 @@ source); replacing seeds with pack-run suite scores is the standing priority.
 
 - **No score without a suite and a date.** Unbenchmarked lanes say so
   (`overall: null`) — the registry never invents numbers.
-- **Newest ≠ best** is an empirical rule here: flux-1.1-pro outbenchmarks the
-  newer flux-2-pro; the Codex CLI's newer default model lost a side-by-side
-  audition to gpt-5.5.
-- **Web-UI providers aren't hidden.** Kling and Seedream win their lanes on
-  quality but can't be scripted — the registry records them as
-  `human_options` and the router surfaces them to you instead of pretending
-  they don't exist.
+- **Newest ≠ best** is an empirical rule here: the Codex CLI's newer default
+  model lost a side-by-side audition to gpt-5.5 (the retired image-lane evals
+  showed the same pattern).
+- **Scope is agent-drivable CLIs.** Quality winners an agent can't script
+  (web-UI-only tools) don't get routed — the `human_options` mechanism
+  records them for humans when one earns its place, instead of pretending a
+  lane exists.
 - **Every cost number carries a source and a confidence** (`exact` vs
   `estimated`). Vision-LLM judging only in benchmarks — pixel metrics
   measured r≈0.08 against human preference and are banned.

@@ -6,10 +6,9 @@ code in this repository.
 ## What This Is
 
 AIMR (AI Model Router): a **one-skill pack + machine-readable capability
-registry** that teaches a planning agent to route work (image gen, reference
-edits, video previz, code recon, web research, delegated implementation,
-second-opinion reviews, bulk reading) to the best specialist model/CLI it can
-afford — with submodel, effort-level, and cost granularity, and benchmarks
+registry** that teaches a planning agent to route work (image gen, video
+previz, code recon, web research, delegated implementation, second-opinion
+reviews, bulk reading) to the best specialist model/CLI it can afford — with submodel, effort-level, and cost granularity, and benchmarks
 keeping the rankings honest.
 
 There is no application to run. The deliverable is one skill (markdown +
@@ -29,8 +28,10 @@ skills/aimr/              THE product — one install unit.
                           economics, handoff-failure policy.
   registry.json           core artifact. Top-level `models` (cost catalog:
                           quota weights, $/MTok, efforts) + `capabilities`
-                          (ranked providers, four contracts each) +
-                          `human_options` (unroutable quality winners).
+                          (ranked providers, four contracts each).
+                          `human_options` (unroutable quality winners) is a
+                          supported mechanism, currently empty — scope is
+                          agent-drivable CLIs (2026-07-13 descope).
                           Schema rules enforced by tests/test_registry.py.
   references/             per-lane invocation discipline + gotchas, loaded on
                           demand. models.md = tier/effort heuristics;

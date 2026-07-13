@@ -61,8 +61,9 @@ scores name their source study and `unbenchmarked` means exactly that.
 ## Keeping lanes honest over time
 
 - Re-run suites when a provider ships a major version — and remember the
-  standing finding: **newest ≠ best** (flux-1.1-pro over flux-2-pro; gpt-5.5
-  over the newer CLI default). Rankings change on evidence, not release notes.
+  standing finding: **newest ≠ best** (gpt-5.5 over the newer CLI default;
+  the retired image evals repeatedly showed a model's predecessor
+  outbenchmarking it). Rankings change on evidence, not release notes.
 - Prune gotchas that stop reproducing; date-stamp new ones.
 - If a provider's moderation/limits behavior changes character, that's
   registry `gotchas` material even without a re-benchmark.
