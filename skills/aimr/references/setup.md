@@ -37,6 +37,9 @@ roadmap; until then these windows + judgment are the affordability check).
 - Auth: Google account OAuth on first run, or `GEMINI_API_KEY` for API-key
   mode. Quota differs by auth path.
 - Probe: `gemini --version && echo "2+2?" | gemini -p "answer briefly"`.
+- **2026-07-12**: the free individual tier is discontinued — on CLI 0.50.0 the
+  probe fails with `IneligibleTierError` directing users to Antigravity.
+  Until re-verified, this lane requires `GEMINI_API_KEY` auth.
 - Limits: the free personal tier has documented daily/minute request caps
   (on the order of 1,000 requests/day — check
   `google-gemini/gemini-cli` docs/quota-and-pricing.md for current numbers);

@@ -398,7 +398,10 @@
             "source": "unbenchmarked",
             "notes": "UNBENCHMARKED — drafted lane. First candidate for a pack-run suite (longcontext-v1)."
           },
-          "gotchas": ["reference is a draft: verify invocation flags against the installed gemini CLI version before relying on it"]
+          "gotchas": [
+            "reference is a draft: verify invocation flags against the installed gemini CLI version before relying on it",
+            "2026-07-12: free individual-tier auth is DEAD on gemini-cli 0.50.0 — probe returns IneligibleTierError ('migrate to the Antigravity suite'); the lane needs API-key auth or the successor product until re-verified"
+          ]
         }
       ]
     }
