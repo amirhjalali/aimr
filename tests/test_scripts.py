@@ -37,6 +37,20 @@ def test_python_scripts_compile(script):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_trigger_eval_tracks_live_description():
+    """The trigger eval binds to the description it measured: if SKILL.md's
+    frontmatter description changes, this fails until the eval is re-run
+    and skills/aimr/evals/triggers.json is updated with the new text+result."""
+    import json
+    evals = json.loads((ROOT / "skills" / "aimr" / "evals" / "triggers.json").read_text())
+    skill_text = (ROOT / "skills" / "aimr" / "SKILL.md").read_text()
+    frontmatter = skill_text.split("---")[1]
+    live_description = frontmatter.split("description:")[1].strip().strip('"')
+    assert evals["description_under_test"] == live_description, \
+        "SKILL.md description changed — re-run the trigger eval and update triggers.json"
+    assert evals["runs"], "triggers.json needs at least one recorded run"
+
+
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 def test_codex_task_sh_parses():
     proc = subprocess.run(

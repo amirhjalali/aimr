@@ -71,7 +71,7 @@
         "confidence": "exact"
       },
       "usage_probe": {
-        "method": "no stable scriptable pool-percent readout (TUI /usage is interactive-only; the gRPC-web billing endpoint some trackers use is unofficial and drift-prone). Headless JSON stamps per-run usage/modelUsage/total_cost_usd fields since 0.2.97. Free/X-Basic tier gate: media tools hard-fail with 'Do not retry this tool' — treat as lane-unavailable, never retry",
+        "method": "no stable scriptable pool-percent readout (the TUI /usage command just opens grok.com/?_s=usage in a browser — no headless subcommand exists; the ACP x.ai/billing JSON-RPC method returns -32601 Method-not-found on 0.2.99, live-verified 2026-07-13; the gRPC-web billing endpoint some trackers use needs browser cookies and is unofficial/drift-prone). Headless JSON stamps per-run usage/modelUsage/total_cost_usd fields since 0.2.97 — but cost fields are often OMITTED on subscription/OAuth runs (cost_is_partial): absence means unreported, never free. Free/X-Basic tier gate: media tools hard-fail with 'Do not retry this tool' — treat as lane-unavailable, never retry",
         "network": false,
         "scope": "per-run only; pool-level percent is human-web-only",
         "source": "grok 0.2.99 live runs + grok.com shared-usage FAQ, 2026-07-13",
@@ -359,7 +359,7 @@
           },
           "artifact": { "type": "file", "format": "markdown review — caller captures agent's final message", "delivery": "stdout" },
           "cost": { "pool": "claude-sub", "est_per_call": "quota_weight 5 per token vs fable's 10", "confidence": "estimated" },
-          "score": { "overall": null, "dims": {}, "suite": null, "date": null, "source": "unbenchmarked", "notes": "UNBENCHMARKED as a routed lane. Field record 2026-07-11: independent Opus critique of this pack's v2 design surfaced the probes-lie caveat and the sparse-scores discipline that the authoring model's own pass missed." },
+          "score": { "overall": null, "dims": {}, "suite": null, "date": null, "source": "unbenchmarked", "notes": "UNBENCHMARKED as a routed lane. Field record 2026-07-11: independent Opus critique of this pack's v2 design surfaced the probes-lie caveat and the sparse-scores discipline that the authoring model's own pass missed. 2026-07-14: routed Opus review of the doctor script found a real misroute bug (in-session lapsed-token false-negative) that a 23-agent same-model review pass had missed — a different MODEL adds signal even within the same family." },
           "gotchas": [
             "give the reviewer the raw artifact, not the author's summary of it — summaries launder the author's blind spots into the review"
           ]
@@ -438,11 +438,13 @@
             "suite": null,
             "date": null,
             "source": "unbenchmarked",
-            "notes": "UNBENCHMARKED fallback for when the gemini lane is absent or blocked (its default state for individual accounts since 2026-06-18). Text-only and a smaller window than Gemini — chunk the material and distill per chunk. Field anchor: orchestrated bulk reading reached ~96% of solo quality at ~46% of cost (BrowseComp; see SKILL.md step 2)."
+            "notes": "UNBENCHMARKED but FIELD-RUN (2026-07-14: two-chunk research-corpus distillation dogfood; both workers held the contract — confidence tags preserved, and the open-questions demand surfaced a real contradiction between sources that a single-pass read had missed). Text-only and a smaller window than Gemini — chunk the material and distill per chunk. Field anchor: orchestrated bulk reading reached ~96% of solo quality at ~46% of cost (BrowseComp; see SKILL.md step 2)."
           },
           "gotchas": [
             "no native audio/video/PDF ingestion — extract text first, or report that media understanding has no routable lane",
-            "chunk to fit the subagent window; demand per-chunk citations plus an explicit open-questions list, or cross-chunk links silently drop"
+            "chunk to fit the subagent window; demand per-chunk citations plus an explicit open-questions list, or cross-chunk links silently drop (2026-07-14: the open-questions list is what caught a real cross-source contradiction)",
+            "chunk overlap produces near-duplicate facts across distillates — the caller dedupes when stitching (observed 2026-07-14)",
+            "capture the worker's final message to a file WHEN IT RETURNS — recovering it later means parsing transcript JSONL for the last assistant text block (observed 2026-07-14)"
           ]
         }
       ]

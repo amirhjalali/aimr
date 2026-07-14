@@ -1,0 +1,35 @@
+{
+  "$note": "Trigger-reliability fixture for SKILL.md's frontmatter description. Method: an LLM judge sees ONLY the frontmatter (name + description) as it appears in an available-skills list, plus each prompt in isolation, and decides whether a competent agent would invoke the skill before proceeding. Not a CI gate (no LLM in CI) — re-run manually whenever the description changes, and record the run below. A miss on any 'expect: true' prompt means the description has a coverage hole; a false-positive on 'expect: false' means it over-triggers and will annoy users into disabling it.",
+  "description_under_test": "Use BEFORE picking a tool, model, or effort level for generation or delegation work — generating an image, animating a frame, reconning a codebase, researching the web, delegating implementation, getting a second-opinion review, digesting bulk material — and whenever asked which AI model/CLI to use, what it costs, whether a lane (codex, gemini, grok, claude subagents) is installed/authenticated/alive, or how much quota remains.",
+  "prompts": [
+    { "id": "S1", "prompt": "generate a hero image for the landing page", "expect": true },
+    { "id": "S2", "prompt": "can you animate this product shot into a short clip?", "expect": true },
+    { "id": "S3", "prompt": "have another model double-check this diff before I merge", "expect": true },
+    { "id": "S4", "prompt": "which AI CLI should I use to summarize this 3-hour meeting recording?", "expect": true },
+    { "id": "S5", "prompt": "delegate implementing this parser to a cheaper model", "expect": true },
+    { "id": "S6", "prompt": "is codex installed here and do I have quota left?", "expect": true },
+    { "id": "S7", "prompt": "research the best vector DB options on the web and cite sources", "expect": true },
+    { "id": "S8", "prompt": "what's the cheapest way to bulk-read these 500 files and answer questions?", "expect": true },
+    { "id": "S9", "prompt": "make a sticker sheet design for print-on-demand", "expect": true },
+    { "id": "S10", "prompt": "how much of my claude weekly limit have I used?", "expect": true },
+    { "id": "N1", "prompt": "fix this failing unit test", "expect": false },
+    { "id": "N2", "prompt": "rename variable foo to bar across the repo", "expect": false },
+    { "id": "N3", "prompt": "what does this regex do?", "expect": false },
+    { "id": "N4", "prompt": "write a README for this project", "expect": false },
+    { "id": "N5", "prompt": "rebase my branch onto main", "expect": false },
+    { "id": "N6", "prompt": "why is this docker build slow?", "expect": false },
+    { "id": "N7", "prompt": "add error handling to this function", "expect": false },
+    { "id": "N8", "prompt": "explain the difference between TCP and UDP", "expect": false },
+    { "id": "N9", "prompt": "update the changelog for v2.1", "expect": false },
+    { "id": "N10", "prompt": "profile this python script for hotspots", "expect": false }
+  ],
+  "runs": [
+    {
+      "date": "2026-07-14",
+      "judge": "claude sonnet-5 (single judge, prompts judged in isolation within one run)",
+      "score": "20/20",
+      "misses": [],
+      "notes": "First measurement, taken against the v2.1 trigger-grammar rewrite of the description. Single-judge single-run — treat as a smoke signal, not a benchmark."
+    }
+  ]
+}

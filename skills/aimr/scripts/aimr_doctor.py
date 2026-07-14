@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """AIMR doctor — the availability layer: which lanes are routable RIGHT NOW.
 
-Answers, in under ~2 seconds by default: which provider CLIs are installed,
+Answers, typically in well under 2 seconds on a warm machine (every
+subprocess is hard-capped by --timeout, default 5s, so the worst case is
+bounded, not fast): which provider CLIs are installed,
 which are authenticated (and on what plan), how much quota each pool has
 left where that is knowable, and therefore which registry capabilities are
 routable right now. The registry (quality layer: rankings, scores, weights)
@@ -28,7 +30,7 @@ What this script reads and calls (consent posture)
 Reads locally: ~/.claude/.credentials.json (expiry/plan fields; under
 --deep the accessToken is read and sent as a Bearer header to Anthropic's
 usage endpoint), $CODEX_HOME/auth.json (JWT plan claim),
-$CODEX_HOME/sessions/*/rollout-*.jsonl (token_count.rate_limits),
+$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl (token_count.rate_limits),
 ~/.gemini/{settings,oauth_creds,google_accounts}.json (auth method/expiry),
 $GROK_HOME/auth.json (expiry only). Secrets are never printed or logged.
 Network calls happen ONLY under --deep, listed above. The usage cache lives
@@ -362,16 +364,22 @@ def probe_claude(home: Path, deep: bool, timeout: float, cache_dir: Path) -> dic
         }
 
     usable = bool(path) or in_session
+    status = result["auth"]["status"]
     if not usable:
         result["verdict"] = "absent"
-    elif result["auth"]["status"] == "ok":
+    elif status == "ok":
         result["verdict"] = "ready"
-    elif result["auth"]["status"] == "expired":
-        result["verdict"] = "auth-expired"
-    elif result["auth"]["status"] == "missing":
+    elif status == "expired":
+        # In-session, the Agent tool routes regardless of the on-disk token
+        # (which lapses briefly between refreshes) — same rescue as `missing`.
+        result["verdict"] = "ready" if in_session else "auth-expired"
+        if in_session:
+            result["notes"].append(
+                "on-disk OAuth token lapsed, but this IS a live Claude Code session — "
+                "subagent lanes route via the Agent tool (external `claude -p` dispatch "
+                "may need a refresh)")
+    else:  # missing
         result["verdict"] = "ready" if in_session else "unauthenticated"
-    else:
-        result["verdict"] = "unknown"
     if in_session and result["verdict"] == "ready" and not creds:
         result["notes"].append("auth assumed from the live Claude Code session")
     return result
@@ -430,6 +438,12 @@ def _codex_windows(rl: dict) -> list[dict]:
             continue
         name = _humanize_minutes(w.get("window_minutes"), default_name)
         windows.append(_window(name, w.get("used_percent"), _iso(w.get("resets_at"))))
+    if not windows:
+        # legacy 2025-era flat shape (pre-nested-windows rollouts)
+        for key, name in (("primary_used_percent", "5h"),
+                          ("secondary_used_percent", "7d")):
+            if isinstance(rl.get(key), (int, float)):
+                windows.append(_window(name, rl[key], None))
     return windows
 
 
@@ -652,12 +666,20 @@ def _parse_expiry(value) -> float | None:
 def probe_grok(deep: bool, timeout: float) -> dict:
     grok_home = Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
     path = shutil.which("grok")
-    result: dict = {"installed": bool(path), "version": None,
+    # npm-postinstall layouts self-copy the binary under $GROK_HOME/bin
+    # without necessarily linking it onto PATH — that's still installed.
+    binary = path or (str(grok_home / "bin" / "grok")
+                      if os.access(grok_home / "bin" / "grok", os.X_OK) else None)
+    result: dict = {"installed": bool(binary), "version": None,
                     "auth": {"status": "unknown", "method": None, "plan": None},
                     "usage": None, "verdict": "absent", "notes": []}
-    if not path:
+    if not binary:
         return result
-    result["version"] = _version_of("grok", timeout)
+    if not path:
+        result["notes"].append(
+            f"binary at {binary} is NOT on PATH — invoke it by that absolute path "
+            "(or add $GROK_HOME/bin to PATH)")
+    result["version"] = _version_of(binary, timeout)
 
     entries = _grok_auth_entries(grok_home)
     if os.environ.get("XAI_API_KEY"):
@@ -680,7 +702,7 @@ def probe_grok(deep: bool, timeout: float) -> dict:
 
     if deep and result["auth"]["status"] == "ok":
         rc, out, _err = _run(
-            ["grok", "--no-auto-update", "-p", "ping",
+            [binary, "--no-auto-update", "-p", "ping",
              "--output-format", "json", "--max-turns", "1"], timeout)
         if rc == 0:
             result["notes"].append("liveness probe OK — NOTE: it drew the shared weekly SuperGrok pool")
@@ -740,7 +762,9 @@ def build_report(registry: dict, deep: bool, timeout: float,
         routable, unavailable = [], []
         for p in cap.get("providers", []):
             pool = (p.get("cost") or {}).get("pool")
-            verdict = pools.get(pool, {}).get("verdict", "unknown")
+            # "not-probed" ≠ "unknown": a --pool filter must not make healthy
+            # pools read as broken in the capability rollup.
+            verdict = pools.get(pool, {}).get("verdict", "not-probed")
             entry = {"id": p.get("id"), "pool": pool, "pool_verdict": verdict}
             if verdict == "ready":
                 routable.append(entry)
@@ -751,11 +775,11 @@ def build_report(registry: dict, deep: bool, timeout: float,
             "routable": routable,
             "unavailable": unavailable,
         }
-        if routable and unavailable and unavailable[0] is not None and \
+        if routable and unavailable and \
                 cap.get("providers") and cap["providers"][0].get("id") != routable[0]["id"]:
             capabilities[cap_name]["substitution"] = (
                 f"top-ranked {cap['providers'][0].get('id')} is unavailable "
-                f"({unavailable[0]['pool_verdict'] if unavailable else 'n/a'}); "
+                f"({unavailable[0]['pool_verdict']}); "
                 f"best available is {routable[0]['id']} — state this substitution when routing")
         if not routable:
             reasons = {f"{e['pool']}: {e['pool_verdict']}" for e in unavailable}
@@ -802,7 +826,7 @@ def render_human(report: dict) -> str:
              + ("" if report["mode"] == "deep" else "; network probes off — --deep adds live quota")
              + ")", "", "POOLS"]
     for pid, p in report["pools"].items():
-        head = f"  {pid:<11} {p['verdict']:<15}"
+        head = f"  {pid:<11} {p['verdict']:<16}"
         bits = []
         if p.get("version"):
             bits.append(p["version"])
@@ -856,8 +880,9 @@ def main() -> int:
                     help="add network probes (live quota / liveness)")
     ap.add_argument("--pool", action="append", default=None, metavar="POOL",
                     help="probe only this pool (repeatable)")
-    ap.add_argument("--timeout", type=float, default=10.0,
-                    help="per-probe timeout in seconds (default 10)")
+    ap.add_argument("--timeout", type=float, default=5.0,
+                    help="per-subprocess/probe timeout in seconds (default 5; "
+                         "raise for cold node CLIs or slow networks under --deep)")
     ap.add_argument("--registry", default=None,
                     help="path to registry.json (default: sibling of this script)")
     args = ap.parse_args()

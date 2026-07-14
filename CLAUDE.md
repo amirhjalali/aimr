@@ -41,6 +41,9 @@ skills/aimr/              THE product — one install unit.
   references/             per-lane invocation discipline + gotchas, loaded on
                           demand. models.md = tier/effort heuristics;
                           setup.md = doctor output + per-CLI auth and limits.
+  evals/                  triggers.json: trigger-reliability fixture + run
+                          record; a test pins it to SKILL.md's live
+                          description (change one -> re-run the other).
   scripts/                aimr_doctor.py (availability/usage probe),
                           codex_image_gen.py (image runner), codex-task.sh
                           (worktree harness). Stdlib/bash only.

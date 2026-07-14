@@ -173,6 +173,23 @@ def test_claude_expired_credentials(tmp_path):
     assert report["pools"]["claude-sub"]["verdict"] == "auth-expired"
 
 
+def test_claude_in_session_rescues_expired_token(tmp_path):
+    """The on-disk OAuth token lapses briefly between refreshes; inside a
+    live session the Agent tool routes anyway — expired must not BLOCK
+    the subagent lanes there (found by the opus dogfood review)."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    make_stub(bin_dir, "claude")
+    write_claude_creds(home, PAST_MS)
+    report, rc = run_doctor(home, bin_dir, env_extra={"CLAUDECODE": "1"})
+    claude = report["pools"]["claude-sub"]
+    assert claude["verdict"] == "ready"
+    assert any("lapsed" in n for n in claude["notes"])
+    assert report["capabilities"]["review-second-opinion"]["best_available"] \
+        == "claude/subagent-opus"
+    assert rc == 0
+
+
 def test_codex_ready_with_rollout_quota(tmp_path):
     home = tmp_path / "home"; bin_dir = tmp_path / "bin"
     home.mkdir(); bin_dir.mkdir()
@@ -197,6 +214,27 @@ def test_codex_ready_with_rollout_quota(tmp_path):
     # top-ranked lanes come back to life
     assert report["capabilities"]["code-recon"]["best_available"] == "codex/gpt-5.5-exec"
     assert "substitution" not in report["capabilities"]["code-recon"]
+
+
+def test_codex_legacy_flat_rate_limit_shape(tmp_path):
+    """2025-era rollouts carry flat primary_used_percent instead of nested
+    windows — the scan must still surface the percentages."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    make_stub(bin_dir, "codex",
+              'if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi\n'
+              'echo "codex-cli 9.9.9"\nexit 0\n')
+    sessions = home / ".codex" / "sessions" / "2025" / "12" / "01"
+    sessions.mkdir(parents=True)
+    (sessions / "rollout-2025-12-01T09-00-00-old.jsonl").write_text(json.dumps({
+        "timestamp": "2025-12-01T09:00:00.000Z", "type": "event_msg",
+        "payload": {"type": "token_count", "info": {},
+                    "rate_limits": {"primary_used_percent": 77.0,
+                                    "secondary_used_percent": 12.0}}}) + "\n")
+    report, _ = run_doctor(home, bin_dir)
+    by_name = {w["name"]: w for w in report["pools"]["codex-sub"]["usage"]["windows"]}
+    assert by_name["5h"]["used_percent"] == 77.0
+    assert by_name["7d"]["used_percent"] == 12.0
 
 
 def test_codex_unauthenticated(tmp_path):
@@ -256,6 +294,22 @@ def test_grok_session_auth(tmp_path):
     assert rc == 0
 
 
+def test_grok_binary_off_path_still_detected(tmp_path):
+    """npm-postinstall layouts leave the binary at $GROK_HOME/bin/grok
+    without a PATH link — the doctor must still see it as installed."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()  # note: NO grok stub on PATH
+    gbin = home / ".grok" / "bin"; gbin.mkdir(parents=True)
+    make_stub(gbin, "grok", 'echo "grok 9.9.9 (offpath)"\nexit 0\n')
+    report, rc = run_doctor(home, bin_dir)
+    grok = report["pools"]["grok"]
+    assert grok["installed"] is True
+    assert grok["version"] == "grok 9.9.9 (offpath)"
+    assert any("NOT on PATH" in n for n in grok["notes"])
+    assert grok["verdict"] == "unauthenticated"  # no auth.json
+    assert rc == 2  # nothing else on this machine
+
+
 def test_grok_expired_session(tmp_path):
     home = tmp_path / "home"; bin_dir = tmp_path / "bin"
     home.mkdir(); bin_dir.mkdir()
@@ -272,6 +326,10 @@ def test_pool_filter(tmp_path):
     home.mkdir(); bin_dir.mkdir()
     report, _ = run_doctor(home, bin_dir, "--pool", "grok")
     assert list(report["pools"]) == ["grok"]
+    # unprobed pools must read "not-probed", never as broken/unknown
+    recon = report["capabilities"]["code-recon"]
+    assert all(e["pool_verdict"] == "not-probed" for e in recon["unavailable"])
+    assert "not-probed" in recon["blocked_reason"]
 
 
 def test_unrouted_cli_detection(tmp_path):
