@@ -12,10 +12,12 @@ reviews, bulk reading) to the best specialist model/CLI it can afford — with s
 keeping the rankings honest.
 
 There is no application to run. The deliverable is one skill (markdown +
-JSON + two stdlib scripts). Design specs:
-`docs/superpowers/specs/2026-07-11-aimr-v2-one-skill-pack-design.md` (current)
-and `2026-07-11-aimr-skills-pack-design.md` (v1; benchmark methodology still
-in force).
+JSON + three stdlib scripts). Design specs:
+`docs/superpowers/specs/2026-07-13-aimr-v2.1-doctor.md` (current: the
+availability/usage probe layer), `2026-07-11-aimr-v2-one-skill-pack-design.md`
+(v2 packaging; its "no multi-CLI aggregator exists" research claims were
+corrected by the v2.1 spec), and `2026-07-11-aimr-skills-pack-design.md`
+(v1; benchmark methodology still in force).
 
 Lineage: grew out of `amirhjalali/agent-wrangler` (the tmux orchestrator,
 which remains its own project).
@@ -24,19 +26,23 @@ which remains its own project).
 
 ```
 skills/aimr/              THE product — one install unit.
-  SKILL.md                routing procedure, task-shape guidance, delegation
-                          economics, handoff-failure policy.
+  SKILL.md                routing procedure (step 0: run the doctor),
+                          task-shape guidance, delegation economics,
+                          handoff-failure policy.
   registry.json           core artifact. Top-level `models` (cost catalog:
-                          quota weights, $/MTok, efforts) + `capabilities`
-                          (ranked providers, four contracts each).
+                          quota weights, $/MTok, efforts) + `pools` (the
+                          availability layer's probe RECIPES — results are
+                          never persisted here) + `capabilities` (ranked
+                          providers, four contracts each).
                           `human_options` (unroutable quality winners) is a
                           supported mechanism, currently empty — scope is
                           agent-drivable CLIs (2026-07-13 descope).
                           Schema rules enforced by tests/test_registry.py.
   references/             per-lane invocation discipline + gotchas, loaded on
                           demand. models.md = tier/effort heuristics;
-                          setup.md = per-CLI auth and limits.
-  scripts/                codex_image_gen.py (image runner), codex-task.sh
+                          setup.md = doctor output + per-CLI auth and limits.
+  scripts/                aimr_doctor.py (availability/usage probe),
+                          codex_image_gen.py (image runner), codex-task.sh
                           (worktree harness). Stdlib/bash only.
 benchmarks/               methodology + rubric + judge prompt. The suite
                           RUNNER is deliberately absent until v2.2 ships a
@@ -48,6 +54,8 @@ tests/                    registry honesty checks (run in CI).
 ## Commands
 
 - Tests: `python3 -m pytest tests/` (pytest is the only dependency; Python 3.10+)
+- Doctor (availability/usage report): `python3 skills/aimr/scripts/aimr_doctor.py`
+  (`--json` for agents, `--deep` for live quota)
 - Image lane smoke: `python3 skills/aimr/scripts/codex_image_gen.py --help`
 
 ## Non-negotiable conventions
@@ -72,6 +80,12 @@ tests/                    registry honesty checks (run in CI).
   `source: "unbenchmarked"`; third-party API entries may be gotcha-free).
 - Scripts stay stdlib-only, `from __future__ import annotations`, argparse,
   timeouts on all subprocess calls.
-- The usage manager (probe-first quota awareness + statusline) is a ROADMAP
-  item (v2.1, optional extra) — do not reintroduce budget machinery into the
-  core skill.
+- **Usage awareness shipped 2026-07-13 as the doctor** (probe-first, founder
+  decision in-session): `aimr_doctor.py` reports installed/auth/quota and
+  never persists results into the registry (two-layer rule: registry =
+  slow-moving quality rankings; doctor = live availability). **Budget
+  machinery stays banned from core**: no ledgers, no spend accumulation, no
+  hard budget gates — the doctor reports, the routing skill decides, and
+  substitutions are always stated, never silent. Probe readings carry
+  source + as-of + confidence, and are soft signals (probes can lie).
+  A statusline remains an optional future extra.

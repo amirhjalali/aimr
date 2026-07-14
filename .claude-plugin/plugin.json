@@ -1,9 +1,9 @@
 {
   "name": "aimr",
-  "version": "2.0.0",
-  "description": "AIMR (AI Model Router): aim agent work at the best model you can afford. One skill that routes image gen, reference edits, video previz, code recon, web research, delegated implementation, second-opinion reviews, and bulk reading to the winning CLI/model — with submodel, effort-level, and cost granularity, ranked by benchmarked quality.",
+  "version": "2.1.0",
+  "description": "AIMR (AI Model Router): aim agent work at the best model you can afford. One skill that routes image gen, video previz, code recon, web research, delegated implementation, second-opinion reviews, and bulk reading to the winning CLI/model — with submodel, effort-level, and cost granularity, benchmarked rankings, and a doctor that probes which CLIs are installed, authenticated, and have quota left.",
   "author": { "name": "Amir H. Jalali" },
   "homepage": "https://github.com/amirhjalali/aimr",
   "license": "MIT",
-  "keywords": ["skills", "routing", "model-router", "interoperability", "codex", "grok", "gemini", "claude", "benchmarks", "delegation"]
+  "keywords": ["skills", "routing", "model-router", "interoperability", "codex", "grok", "gemini", "claude", "benchmarks", "delegation", "usage", "quota"]
 }

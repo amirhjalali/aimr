@@ -1,9 +1,84 @@
 {
-  "$schema_note": "AIMR (AI Model Router) capability registry v2. Top-level `models` is the submodel catalog: cost data (API $/MTok where metered, quota-draw weight where subscription), effort levels, and when-to-use. Capabilities rank `providers` best-first; each provider carries four contracts: invocation (how to call), artifact (what comes back: `type` is the terminal artifact class — file|url|worktree — and `delivery` is what work remains after the provider returns: path|download-required|stdout|worktree-review), cost (which account pool it draws), score (benchmarked, dated, auditable to a named suite — or explicitly unbenchmarked/seeded, never invented). `<skill-dir>` in command templates means the directory containing this registry, wherever the skill is installed. LLM-backed providers reference a `models` entry via `model` (+ `effort`); media providers are their own model. `human_options` lists quality-winning providers agents cannot drive — surfaced to humans, never routed; their scores follow the same auditability rules. Every cost number carries source + confidence; null means unknown, not zero.",
+  "$schema_note": "AIMR (AI Model Router) capability registry v2. Top-level `models` is the submodel catalog: cost data (API $/MTok where metered, quota-draw weight where subscription), effort levels, and when-to-use. Top-level `pools` is the availability layer's metadata: how scripts/aimr_doctor.py detects each account pool's CLI, auth, and usage — probe RECIPES live here with source + confidence; probe RESULTS never do (quality rankings move slowly and belong in this file; availability is probed live at routing time). Capabilities rank `providers` best-first; each provider carries four contracts: invocation (how to call), artifact (what comes back: `type` is the terminal artifact class — file|url|worktree — and `delivery` is what work remains after the provider returns: path|download-required|stdout|worktree-review), cost (which account pool it draws), score (benchmarked, dated, auditable to a named suite — or explicitly unbenchmarked/seeded, never invented). `<skill-dir>` in command templates means the directory containing this registry, wherever the skill is installed. LLM-backed providers reference a `models` entry via `model` (+ `effort`); media providers are their own model. `human_options` lists quality-winning providers agents cannot drive — surfaced to humans, never routed; their scores follow the same auditability rules. Every cost number carries source + confidence; null means unknown, not zero.",
   "version": 2,
   "updated": "2026-07-13",
   "$scope_note": "Scope (2026-07-13): AIMR evaluates agent-drivable CLIs and their added capabilities — Codex and Claude are the core lanes; Grok CLI is kept only for image-to-video; Gemini CLI is a draft long-context lane. Third-party per-image APIs (Replicate etc.) and web-UI-only tools (Kling, Magnific/Seedream) were removed from routing on 2026-07-13 — their benchmark findings live on in benchmarks/ and references/, and web-UI quality winners may return as human_options if the need recurs.",
   "scale": "scores are 0-5, anchored rubrics (see benchmarks/)",
+  "pools": {
+    "claude-sub": {
+      "cli": "claude",
+      "kind": "subscription",
+      "reset_windows": "5h rolling + 7d weekly + per-model weekly scoped caps",
+      "auth_probe": {
+        "method": "~/.claude/.credentials.json .claudeAiOauth.expiresAt (epoch ms) > now; plan from .claudeAiOauth.subscriptionType/.rateLimitTier; macOS fallback: Keychain item 'Claude Code-credentials'. (Manual extra: ~/.claude.json .oauthAccount carries org/billing fields the doctor does not read)",
+        "network": false,
+        "source": "local file inspection + claude v2.1.207 binary strings, 2026-07-13",
+        "confidence": "exact"
+      },
+      "usage_probe": {
+        "method": "GET https://api.anthropic.com/api/oauth/usage with 'Authorization: Bearer <accessToken>' + 'anthropic-beta: oauth-2025-04-20' -> five_hour/seven_day .utilization + .resets_at, limits[] (kind weekly_scoped = per-model caps), extra_usage",
+        "network": true,
+        "scope": "account-wide (server-metered across all machines and surfaces)",
+        "caveats": "upstream stuck-429 bug (anthropics/claude-code#30930, #31021, #31637): cache success 180s, back off 30min on error, never clobber last-good data",
+        "source": "verified live 2026-07-13; endpoint string present in claude v2.1.207 binary; same data as the in-app /usage screen",
+        "confidence": "exact"
+      }
+    },
+    "codex-sub": {
+      "cli": "codex",
+      "kind": "subscription",
+      "reset_windows": "primary ~5h + secondary weekly (both delivered as server-header snapshots)",
+      "auth_probe": {
+        "method": "`codex login status` exit 0/1 (mode string on stderr); plan tier: base64url-decode $CODEX_HOME/auth.json tokens.id_token middle segment -> claim 'https://api.openai.com/auth'.chatgpt_plan_type (undocumented-but-stable; unknown-plan on parse failure). (Manual fallback the doctor does not run: `codex doctor --json` checks['auth.credentials'])",
+        "network": false,
+        "source": "openai/codex HEAD bb947e8e + live CLI behavior, 2026-07-13",
+        "confidence": "exact"
+      },
+      "usage_probe": {
+        "method": "reverse-scan newest $CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl for the last {type:'event_msg', payload.type:'token_count'} line with non-null payload.rate_limits -> primary/secondary {used_percent, window_minutes, resets_at (unix s)}, credits, plan_type; live alternative (--deep): `codex app-server` JSON-RPC account/rateLimits/read",
+        "network": false,
+        "scope": "rate_limits mirror x-codex-* server headers (account-wide numbers), but the snapshot is only as fresh as the last codex turn on THIS machine — always surface its timestamp",
+        "source": "openai/codex codex-rs rollout/src/policy.rs, protocol.rs TokenCountEvent, codex-api/src/rate_limits.rs, HEAD bb947e8e 2026-07-13",
+        "confidence": "exact"
+      }
+    },
+    "gemini": {
+      "cli": "gemini",
+      "kind": "per-auth-path (API-key metered/free-capped, Vertex, org Code Assist seats)",
+      "reset_windows": "daily request caps per auth path (API-key free tier 250 req/day Flash-only; Code Assist Standard 1,500/day, Enterprise 2,000/day — vendor docs, checked 2026-07-13)",
+      "auth_probe": {
+        "method": "~/.gemini/settings.json .security.auth.selectedType (oauth-personal|gemini-api-key|vertex-ai), corroborated by oauth_creds.json refresh_token, google_accounts.json .active, or GEMINI_API_KEY env. POLICY KNOWLEDGE: oauth-personal without an org Code Assist seat (GOOGLE_CLOUD_PROJECT) is server-blocked since 2026-06-18 (ALL individual tiers — free, AI Pro, AI Ultra — any CLI version) -> verdict blocked; --deep liveness probe re-verifies (exit 41 = FatalAuthenticationError)",
+        "network": false,
+        "source": "gemini-cli source (storage.ts, oauth2.ts, settingsSchema.ts, errors.ts) + Google deprecation notice (updated 2026-06-23), checked 2026-07-13",
+        "confidence": "exact"
+      },
+      "usage_probe": {
+        "method": "no cheap standing readout on the routable (API-key) path: per-run token stats via --output-format json (stats.models.<id>.tokens); org Code Assist seats can POST cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota; quota errors are typed (TerminalQuotaError = daily cap, RetryableQuotaError = per-minute). NEVER send /stats headlessly — it reaches the model as a prompt, not a command",
+        "network": false,
+        "scope": "per-run only on the API-key path",
+        "source": "gemini-cli json-formatter.ts, uiTelemetry.ts, googleQuotaErrors.ts, code_assist/server.ts, checked 2026-07-13",
+        "confidence": "exact"
+      }
+    },
+    "grok": {
+      "cli": "grok",
+      "kind": "subscription (SuperGrok: ONE shared metered weekly pool across Chat/Imagine/Voice/Build since June 2026 — no longer flat/unmetered)",
+      "reset_windows": "weekly shared pool; percent + reset date at grok.com Settings -> Usage (human surface)",
+      "auth_probe": {
+        "method": "$GROK_HOME/auth.json (default ~/.grok/) has an entry with non-expired expires_at (top-level keys are OIDC scope URLs; ~7-day tokens, CLI auto-refreshes); XAI_API_KEY env is the alternative auth path — NOTE it is metered per-call (api.x.ai billing), NOT the weekly subscription pool. Do NOT trust `grok models` exit code for auth — it exits 0 signed-out; a real headless probe prints {\"type\":\"error\",\"message\":\"Not signed in...\"} on stdout and exits 1",
+        "network": false,
+        "source": "grok 0.2.99 live runs + bundled user-guide 02-authentication.md, 2026-07-13",
+        "confidence": "exact"
+      },
+      "usage_probe": {
+        "method": "no stable scriptable pool-percent readout (TUI /usage is interactive-only; the gRPC-web billing endpoint some trackers use is unofficial and drift-prone). Headless JSON stamps per-run usage/modelUsage/total_cost_usd fields since 0.2.97. Free/X-Basic tier gate: media tools hard-fail with 'Do not retry this tool' — treat as lane-unavailable, never retry",
+        "network": false,
+        "scope": "per-run only; pool-level percent is human-web-only",
+        "source": "grok 0.2.99 live runs + grok.com shared-usage FAQ, 2026-07-13",
+        "confidence": "exact"
+      }
+    }
+  },
   "models": {
     "anthropic/fable-5": {
       "pool": "claude-sub",
@@ -58,16 +133,16 @@
       "quota_weight": null,
       "api_per_mtok": null,
       "efforts": null,
-      "when": "bulk reading and native audio/video/PDF ingestion on the free-tier CLI (documented daily request caps). Model tier behind the CLI varies by auth path; unbenchmarked.",
-      "cost_note": "quota_weight null = draws a separate pool with known daily caps, not the Claude/Codex pools; see references/setup.md"
+      "when": "bulk reading and native audio/video/PDF ingestion via the Gemini CLI — API-key (GEMINI_API_KEY), Vertex, or org Code Assist seat auth ONLY: all individual Google-account tiers (free, AI Pro, AI Ultra) were blocked server-side on 2026-06-18, on every CLI version. Model tier varies by auth path; unbenchmarked.",
+      "cost_note": "quota_weight null = draws a separate pool per auth path (API-key free tier 250 req/day Flash-only; Code Assist Standard 1,500/day, Enterprise 2,000/day — vendor docs 2026-07-13), not the Claude/Codex pools; see pools.gemini and references/setup.md"
     },
     "xai/grok-media": {
       "pool": "grok",
       "quota_weight": null,
       "api_per_mtok": null,
       "efforts": null,
-      "when": "image_to_video previz on the flat grok.com subscription; no per-call metering observed. (Its image_edit tool benchmarked well — 4.7, grok-kling 2026-07-10 — but the lane is out of scope for now.)",
-      "cost_note": "quota_weight null = flat subscription, effectively unmetered for observed volumes"
+      "when": "image_to_video previz on a SuperGrok subscription. Since June 2026 every call draws the ONE shared metered weekly pool (Chat/Imagine/Voice/Build) — no longer flat/unmetered as originally recorded. (Its image_edit tool benchmarked well — 4.7, grok-kling 2026-07-10 — but the lane is out of scope for now.)",
+      "cost_note": "quota_weight null = separate weekly shared pool with no scriptable percent readout (grok.com Settings -> Usage is the human surface); see pools.grok"
     }
   },
   "capabilities": {
@@ -113,11 +188,11 @@
           "reference": "references/video.md",
           "invocation": {
             "type": "headless-cli",
-            "command_template": "grok --always-approve --single \"<motion prompt, start frame attached>\"",
+            "command_template": "grok --no-auto-update --always-approve --output-format json --single \"<motion prompt; reference the start frame by ABSOLUTE path — the CLI's image_to_video tool takes image=<abs path>, duration 6|10s>\"",
             "timeout_s": 180
           },
-          "artifact": { "type": "file", "format": "mp4 (6s, 448-672px)", "delivery": "path" },
-          "cost": { "pool": "grok", "est_per_call": "flat subscription", "confidence": "estimated" },
+          "artifact": { "type": "file", "format": "mp4 (6|10s, 448-672px); lands session-relative at videos/N.mp4 — the tool result reports the absolute path, capture it from the JSON output", "delivery": "path" },
+          "cost": { "pool": "grok", "est_per_call": "draws the shared weekly SuperGrok pool (metered since June 2026); on XAI_API_KEY auth it is per-call metered instead — the doctor reports auth.method", "confidence": "estimated" },
           "score": {
             "overall": 3.5,
             "dims": { "motion_direction": 4.5, "resolution": 2.0 },
@@ -129,7 +204,10 @@
           "gotchas": [
             "448-672px output — previz only, not client-facing",
             "moderation non-deterministic, ~1 in 6-8 calls blocked (domestic framing + flash/minimal-garment combos)",
-            "grok image_gen takes NO reference input — never substitute it when the start frame carries identity"
+            "grok image_gen takes NO reference input — never substitute it when the start frame carries identity",
+            "always pass --no-auto-update in scripted runs (update chatter goes to stderr; JSON stays on stdout)",
+            "free/X-Basic tier: media tools hard-fail with 'Do not retry this tool' — lane-unavailable, not a retryable error (2026-07-13)",
+            "each call draws the shared weekly SuperGrok pool — batch previz waves with the weekly reset date in mind (grok.com Settings -> Usage)"
           ]
         }
       ]
@@ -267,7 +345,7 @@
       ]
     },
     "review-second-opinion": {
-      "description": "Independent review of work by a DIFFERENT model than the author: design critiques, PR second passes, judge/verify stages. Same-model review has correlated blind spots.",
+      "description": "Independent review of work by a DIFFERENT model than the author: design critiques, PR second passes, judge/verify stages. Same-model review has correlated blind spots — pick the provider from a different model family than the author (Claude-authored work -> the codex reviewer; Codex-authored work -> the opus reviewer).",
       "providers": [
         {
           "id": "claude/subagent-opus",
@@ -285,6 +363,32 @@
           "gotchas": [
             "give the reviewer the raw artifact, not the author's summary of it — summaries launder the author's blind spots into the review"
           ]
+        },
+        {
+          "id": "codex/gpt-5.5-exec-review",
+          "model": "openai/gpt-5.5",
+          "effort": "xhigh",
+          "handoff_overhead_tokens": 10000,
+          "reference": "references/recon.md",
+          "invocation": {
+            "type": "headless-cli",
+            "command_template": "codex exec -m gpt-5.5 -C <dir> -s read-only --ephemeral -o review.md - < review-brief.md",
+            "timeout_s": 900
+          },
+          "artifact": { "type": "file", "format": "markdown review", "delivery": "path" },
+          "cost": { "pool": "codex-sub", "est_per_call": "~10k tokens overhead + review", "confidence": "estimated" },
+          "score": {
+            "overall": null,
+            "dims": {},
+            "suite": null,
+            "date": null,
+            "source": "unbenchmarked",
+            "notes": "UNBENCHMARKED as a review lane (same invocation shape as the benchmarked code-recon lane). Exists so Claude-AUTHORED work can get a genuinely different-model review — routing Claude's work to claude/subagent-opus reproduces the correlated-blind-spots problem this capability exists to avoid."
+          },
+          "gotchas": [
+            "same trust calibration as codex recon: verify literal constants at file:line; negative claims ('no bug here') get zero trust without caller probing",
+            "give it the raw diff/artifact in the brief, never the author's summary — and demand file:line evidence per finding"
+          ]
         }
       ]
     },
@@ -297,7 +401,7 @@
           "reference": "references/longcontext.md",
           "invocation": {
             "type": "headless-cli",
-            "command_template": "gemini -p \"<prompt>\" (see references/longcontext.md for file-attachment patterns)",
+            "command_template": "gemini -p \"<prompt>\" --output-format json (see references/longcontext.md for file-attachment patterns)",
             "timeout_s": 600
           },
           "artifact": { "type": "file", "format": "text on stdout — caller redirects", "delivery": "stdout" },
@@ -312,7 +416,33 @@
           },
           "gotchas": [
             "reference is a draft: verify invocation flags against the installed gemini CLI version before relying on it",
-            "2026-07-12: free individual-tier auth is DEAD on gemini-cli 0.50.0 — probe returns IneligibleTierError ('migrate to the Antigravity suite'); the lane needs API-key auth or the successor product until re-verified"
+            "ALL individual Google-account tiers (free, AI Pro, AI Ultra) are blocked server-side since 2026-06-18, on every CLI version (IneligibleTierError points at the Antigravity successor); the lane routes only with GEMINI_API_KEY, Vertex, or an org Code Assist seat (+GOOGLE_CLOUD_PROJECT)",
+            "use --output-format json headlessly: exit 41 = auth failure; stats.models.<id>.tokens is the per-run usage meter; NEVER send /stats as a prompt — it reaches the model as text"
+          ]
+        },
+        {
+          "id": "claude/subagent-bulkread",
+          "model": "anthropic/sonnet-5",
+          "effort": "low",
+          "reference": "references/models.md",
+          "invocation": {
+            "type": "claude-subagent",
+            "command_template": "Agent tool (model: sonnet) with the bulk material chunked into self-contained read-and-distill briefs; from other CLIs: claude -p --model sonnet --effort low \"<brief>\" < chunk.md > out.md",
+            "timeout_s": 900
+          },
+          "artifact": { "type": "file", "format": "text on stdout — caller redirects", "delivery": "stdout" },
+          "cost": { "pool": "claude-sub", "est_per_call": "quota_weight 3 per token; fan-out reading multiplies draw", "confidence": "estimated" },
+          "score": {
+            "overall": null,
+            "dims": {},
+            "suite": null,
+            "date": null,
+            "source": "unbenchmarked",
+            "notes": "UNBENCHMARKED fallback for when the gemini lane is absent or blocked (its default state for individual accounts since 2026-06-18). Text-only and a smaller window than Gemini — chunk the material and distill per chunk. Field anchor: orchestrated bulk reading reached ~96% of solo quality at ~46% of cost (BrowseComp; see SKILL.md step 2)."
+          },
+          "gotchas": [
+            "no native audio/video/PDF ingestion — extract text first, or report that media understanding has no routable lane",
+            "chunk to fit the subagent window; demand per-chunk citations plus an explicit open-questions list, or cross-chunk links silently drop"
           ]
         }
       ]

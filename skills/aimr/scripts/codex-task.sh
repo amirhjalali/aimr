@@ -45,34 +45,59 @@ case "$cmd" in
     git -C "$REPO_ROOT" rev-parse --verify origin/main >/dev/null 2>&1 && base="origin/main"
     git -C "$REPO_ROOT" worktree add -b "$branch" "$dir" "$base"
     (cd "$dir" && install_deps)
-    # Bounded run: SIGTERM at the deadline, SIGKILL 30s later. A killed run
-    # may still have finished its file work — check the worktree before
-    # rerunning (see the timeout row in SKILL.md's failure table).
+    # Bounded run: SIGTERM at the deadline, SIGKILL 30s later — to the whole
+    # process GROUP where setsid exists (killing only the lead pid leaves the
+    # hung tree alive; same lesson codex_image_gen.py encodes with killpg).
+    # A killed run may still have finished its file work — check the worktree
+    # before rerunning (see the timeout row in SKILL.md's failure table).
     timeout_s="${CODEX_TIMEOUT_S:-1800}"
     if [ "$timeout_s" = "0" ]; then
       codex exec -C "$dir" -s workspace-write \
         --output-last-message "$dir/.codex-last.txt" \
         "$@" - <"$brief"
     else
-      codex exec -C "$dir" -s workspace-write \
-        --output-last-message "$dir/.codex-last.txt" \
-        "$@" - <"$brief" &
+      if command -v setsid >/dev/null 2>&1; then
+        setsid codex exec -C "$dir" -s workspace-write \
+          --output-last-message "$dir/.codex-last.txt" \
+          "$@" - <"$brief" &
+      else
+        codex exec -C "$dir" -s workspace-write \
+          --output-last-message "$dir/.codex-last.txt" \
+          "$@" - <"$brief" &
+      fi
       codex_pid=$!
+      # setsid detaches codex from OUR process group: forward INT/TERM so a
+      # Ctrl-C / caller kill doesn't orphan the run (bash's wait is
+      # interruptible by trapped signals, so this fires promptly).
+      trap '{ kill -TERM -- "-$codex_pid" 2>/dev/null || kill -TERM "$codex_pid" 2>/dev/null; }' INT TERM
       (
-        sleep "$timeout_s" && kill -TERM "$codex_pid" 2>/dev/null &&
-          sleep 30 && kill -KILL "$codex_pid" 2>/dev/null
+        sleep "$timeout_s" &&
+          { kill -TERM -- "-$codex_pid" 2>/dev/null || kill -TERM "$codex_pid" 2>/dev/null; } &&
+          sleep 30 &&
+          { kill -KILL -- "-$codex_pid" 2>/dev/null || kill -KILL "$codex_pid" 2>/dev/null; }
       ) &
       watchdog_pid=$!
       set +e; wait "$codex_pid"; codex_rc=$?; set -e
+      trap - INT TERM
       kill "$watchdog_pid" 2>/dev/null || true
       wait "$watchdog_pid" 2>/dev/null || true
       if [ "$codex_rc" -ne 0 ]; then
+        # Died by signal (rc >= 128): sweep the group unconditionally — the
+        # watchdog's KILL leg never fires when the leader exits on TERM but
+        # a child ignored it (mirrors codex_image_gen.py's killpg).
+        if [ "$codex_rc" -ge 128 ]; then
+          kill -KILL -- "-$codex_pid" 2>/dev/null || true
+        fi
         echo "codex exec exited $codex_rc (timeout after ${timeout_s}s sends TERM)" >&2
       fi
     fi
     echo
     echo "=== codex last message ==="
-    cat "$dir/.codex-last.txt"
+    if [ -f "$dir/.codex-last.txt" ]; then
+      cat "$dir/.codex-last.txt"
+    else
+      echo "(no last message — the codex run was killed or failed before writing one)"
+    fi
     echo
     echo "=== diff stat ==="
     git -C "$dir" add -A --intent-to-add

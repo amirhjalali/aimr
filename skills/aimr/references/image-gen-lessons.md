@@ -96,10 +96,12 @@ https://github.com/wuyoscar/GPT-Image2-Skill — go there for the full style atl
   multi-field layouts (boarding passes, menus with prices, catalog cards) hold.
 - **Put literal text in quotes or ALL CAPS** in the prompt; ALL CAPS in → ALL CAPS
   out.
-- **Two failure edges:** (a) exact kerning/logo typography — Ideogram renders
-  literally and won't editorialize; route logo/wordmark work there. (b) Long
-  foreign-language / dead-language captions read as authentic but contain cropped
-  or invented words — treat as *decorative*, not accurate.
+- **Two failure edges:** (a) exact kerning/logo typography — it auto-elaborates
+  instead of rendering literally (Ideogram won that niche in the source evals,
+  but per-image APIs were descoped 2026-07-13: **no routable alternative
+  exists — surface the ceiling to the human instead of forcing the lane**).
+  (b) Long foreign-language / dead-language captions read as authentic but
+  contain cropped or invented words — treat as *decorative*, not accurate.
 - It **decisively beats Flux** on text (Flux silently corrupts, e.g. "FIRST SIP
   P CLUB").
 
@@ -143,8 +145,11 @@ https://github.com/wuyoscar/GPT-Image2-Skill — go there for the full style atl
   embroidery/patch texture, art-history fusions, dense conceptual compositions,
   text-in-scene, and — uniquely — **photoreal pet-portrait tees** (photo + frame +
   exact name in one shot; the only single-shot model that does this well).
-- **Loses:** exact typography/logos → **Ideogram**; mascot/character craft &
-  pixel-art → **Flux**; native vector/SVG → **Recraft** (it's raster-only).
+- **Loses (known ceilings, no routable alternative since the 2026-07-13
+  descope — report the limitation, don't force the lane):** exact
+  typography/logos (Ideogram won this in the source evals), mascot/character
+  craft & pixel-art (Flux won), native vector/SVG (Recraft won; GPT Image 2
+  is raster-only).
 - **Content filter is narrow.** 0/60 refusals on edgy POD subject matter (skulls,
   daggers, syringe humor, tattoo flash). The filter targets IP/named-artist/real-
   photo, not dark themes.
@@ -194,4 +199,4 @@ https://github.com/wuyoscar/GPT-Image2-Skill — go there for the full style atl
 | Sticker/phone-case cut line broken | No alpha — every output is opaque white-BG RGB. Add a background-removal hop. |
 | Soft/blurry large print | ~1.5 MP native. 4× upscale with Real-ESRGAN. |
 | Character face changes between frames | Model doesn't remember characters. Anchor each frame with a reference PNG (`-i`). |
-| Exact wordmark got editorialized | Auto-elaboration. Route exact-lettering jobs to Ideogram. |
+| Exact wordmark got editorialized | Auto-elaboration — a known ceiling with no routable lane (descoped 2026-07-13). Surface to the human. |

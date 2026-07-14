@@ -34,7 +34,8 @@ Batch (parallel) from a JSON job file
     #               "refs": ["ref.png"], "size": "1024x1024"}, ...]
     python codex_image_gen.py --jobs jobs.json --workers 8
 
-Exit codes: 0 = ok (or partial in batch), 2 = aborted after consecutive hard
+Exit codes: 0 = ok (any success, or nothing to do), 1 = failure (single-image
+mode, or a batch with ZERO successes), 2 = aborted after consecutive hard
 rate-limit hits (credits/quota). Use this in orchestrators to stop a wave early.
 """
 
@@ -301,7 +302,9 @@ def run_batch(jobs: list[dict], *, workers: int, timeout: int,
     ok = sum(1 for r in results if r["status"] == "success")
     print(f"\nDone: {ok}/{len(todo)} succeeded"
           + (f", {skipped} skipped" if skipped else ""))
-    return 2 if aborted else 0
+    if aborted:
+        return 2
+    return 0 if ok or not todo else 1
 
 
 def main() -> int:

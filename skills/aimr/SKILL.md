@@ -1,18 +1,31 @@
 ---
 name: aimr
-description: "AIMR (AI Model Router): route any capability request — generate an image, animate a frame, recon a codebase, research the web, delegate implementation, get a second-opinion review, digest bulk material — to the best specialist model/CLI you can afford right now. Use BEFORE picking a tool, model, or effort level for generation or delegation work: read registry.json for ranked providers and the models cost table, load the winning lane's reference file, and follow the handoff-failure policy when a provider blocks, times out, or rate-limits."
+description: "Use BEFORE picking a tool, model, or effort level for generation or delegation work — generating an image, animating a frame, reconning a codebase, researching the web, delegating implementation, getting a second-opinion review, digesting bulk material — and whenever asked which AI model/CLI to use, what it costs, whether a lane (codex, gemini, grok, claude subagents) is installed/authenticated/alive, or how much quota remains."
 ---
 
 # AIMR — aim agent work at the best model you can afford
 
-This skill turns `registry.json` into a decision procedure. The registry has two
-parts: `models` (the cost catalog: quota-draw weights for subscription pools,
-API $/MTok where metered, effort levels) and `capabilities` (ranked providers,
-each with invocation/artifact/cost/score contracts). `<skill-dir>` in any
-command template means this skill's own directory (the one containing this
-file), wherever it is installed — resolve it before dispatching.
+This skill turns `registry.json` into a decision procedure. The registry has
+three parts: `models` (the cost catalog: quota-draw weights for subscription
+pools, API $/MTok where metered, effort levels), `capabilities` (ranked
+providers, each with invocation/artifact/cost/score contracts), and `pools`
+(how the doctor probes each account pool). `<skill-dir>` in any command
+template means this skill's own directory (the one containing this file),
+wherever it is installed — resolve it before dispatching.
 
 ## The procedure
+
+0. **Probe first.** Run
+   `python3 <skill-dir>/scripts/aimr_doctor.py --json`
+   (local-only, <2s, zero network, zero quota). It reports, per pool:
+   installed / authenticated / plan, any locally-readable quota snapshot,
+   and a per-capability rollup of what is routable right now. Add `--deep`
+   when quota matters for the routing decision (live 5h/7d Claude
+   utilization, codex live rate limits; note: the grok liveness probe draws
+   real quota). Route only among lanes the report marks `ready` —
+   **and when the top-ranked provider is unavailable, SAY which lane you
+   substituted and why; never silently downgrade.** If the script itself
+   can't run, fall back to the manual probes in `references/setup.md`.
 
 1. **Name the capability.** Map the request onto a registry key:
    `image-generation`, `image-to-video`, `code-recon`, `web-research`,
@@ -41,11 +54,12 @@ file), wherever it is installed — resolve it before dispatching.
    (relative draw per token — marginal dollars are a fiction on flat plans);
    for metered pools it is `api_per_mtok` or per-call billing. Route to the
    LOWEST-weight lane that clears the quality bar, and prefer a lower-ranked
-   provider you can afford over a top-ranked one you can't. Check pool health
-   per `references/setup.md` (auth probes, reset windows); if the optional
-   usage manager is installed, probe it instead. Weights are defaults, not
-   limits: judge the output, not the price tag — if a cheap lane misses the
-   bar, redo one rung up without asking.
+   provider you can afford over a top-ranked one you can't. The doctor's
+   usage numbers feed this step: a pool at ≥90% of a window whose reset is
+   far off means prefer the next lane — and say that's why. Probes can lie
+   (documented upstream bugs): treat readings as soft signals, not hard
+   gates. Weights are defaults, not limits: judge the output, not the price
+   tag — if a cheap lane misses the bar, redo one rung up without asking.
 
 5. **Pick effort.** LLM lanes carry an `effort` default in their registry
    entry; `references/models.md` has the heuristics (mechanical/bulk → low or
@@ -84,7 +98,10 @@ Match the orchestration pattern to where the task needs judgment
 
 **Cache affinity**: route repeated calls to the same persistent worker so its
 prompt cache accumulates (cache reads ≈ 0.1×). A fresh worker per request
-re-pays the full context write and can erase the cheap-lane advantage.
+re-pays the full context write and can erase the cheap-lane advantage. The
+same rule at routing granularity: for follow-up work in the same context, a
+cache-warm incumbent beats a marginally higher-ranked cold alternative —
+never switch the delegated CLI/model mid-task without a failure reason.
 
 ## Score hygiene
 
@@ -105,9 +122,9 @@ re-pays the full context write and can erase the cheap-lane advantage.
 | Failure | Signal | Action |
 |---|---|---|
 | Moderation block | provider-specific (Grok: actionable refusal text; GPT Image 2: `stream disconnected` on named artists) | Rewrite per guidance. One unchanged retry max (moderation is non-deterministic on Grok). Then reroute. Never batch-retry unmodified. |
-| Hard rate limit / credits | image runner exit code 2 in batch (`--jobs`) mode; in single-image mode every failure exits 1 — read the error text to distinguish | Stop the lane, fall to next provider. Do not spin. |
+| Hard rate limit / credits | image runner exit 2 in batch (`--jobs`) mode (exit 1 = batch finished with zero successes); single-image mode exits 1 on every failure — read the error text to distinguish | Stop the lane, fall to next provider. Do not spin. |
 | Timeout | runner kill | **Check for a completed artifact before rerunning** — "timed-out" runs have repeatedly turned out to have finished. |
-| Auth | login-status probe fails (see references/setup.md) | Surface to the human. Do not retry around auth. |
+| Auth | doctor verdict `unauthenticated`/`auth-expired`/`blocked`, or a login-status probe fails mid-lane | Surface to the human with the doctor's `fix` command. Do not retry around auth. |
 | Empty/wrong artifact | contract check fails | One retry with the same brief; then treat as a brief/prompt bug, not a transport bug. |
 
 ## Escalation
@@ -128,4 +145,4 @@ clip).
 | `references/recon.md` | routed to any Codex lane (recon, web research, implementation) |
 | `references/longcontext.md` | routed to `gemini/cli` (DRAFT lane) |
 | `references/models.md` | picking a Claude tier or an effort level |
-| `references/setup.md` | first dispatch to a CLI, or any auth/limit question |
+| `references/setup.md` | reading doctor output, per-CLI install/auth/limits, manual fallback probes |

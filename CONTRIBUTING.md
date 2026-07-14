@@ -21,6 +21,13 @@ artifact, and know what it cost, using only what's in this repo.
      never invent a number. If seeded from prior findings:
      `source: "seeded"` and name the source study in `suite`.
    - Record `handoff_overhead_tokens` if you've measured it.
+   - If the lane draws a NEW account pool, add a `pools` entry: the CLI
+     binary name, reset windows, and `auth_probe`/`usage_probe` recipes
+     (method + network flag + source + confidence). Probe *recipes* are
+     registry data; probe *results* never are. Teach
+     `scripts/aimr_doctor.py` the new pool if a simple file/exit-code
+     check doesn't cover it, and add a fixture test in
+     `tests/test_doctor.py`.
 
 3. **Write the reference file** (`skills/aimr/references/<lane>.md`):
    - The exact invocation, copy-pasteable.

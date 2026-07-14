@@ -200,6 +200,13 @@ is deleted with `budget/`.
   own dashboards/CLIs disagree in open bugs), so `estimated`-confidence
   readings soft-gate (prefer cheaper lane near reserve) rather than hard-block.
   No multi-CLI aggregator exists today; this would be the first.
+  **[CORRECTED 2026-07-13 — see `2026-07-13-aimr-v2.1-doctor.md`:** the
+  aggregator claim was refuted (ccusage, CodexBar, caut, openusage all
+  exist); Codex DOES have headless quota readouts (rollout-file rate-limit
+  snapshots + `codex app-server` JSON-RPC); the Claude OAuth usage endpoint
+  is the account quota truth (local JSONLs are per-machine history, not
+  quota); Gemini's individual tiers died server-side 2026-06-18. The
+  shipped v2.1 doctor builds on the corrected facts.**]**
 - **v2.2 — first pack-run benchmark suite** (likely `web-research-v1` or
   `longcontext-v1`, since gemini is the unbenchmarked lane), retiring the
   first seeded scores. Runner machinery returns only then.

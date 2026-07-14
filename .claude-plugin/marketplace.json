@@ -5,7 +5,7 @@
     {
       "name": "aimr",
       "source": "./",
-      "description": "AIMR (AI Model Router): aim agent work at the best model you can afford. Routes image gen, reference edits, video previz, code recon, web research, delegated implementation, second-opinion reviews, and bulk reading to the winning CLI/model, ranked by benchmarked quality."
+      "description": "AIMR (AI Model Router): aim agent work at the best model you can afford. Routes image gen, video previz, code recon, web research, delegated implementation, second-opinion reviews, and bulk reading to the winning CLI/model — benchmarked rankings plus a doctor that probes which CLIs are installed, authenticated, and have quota left."
     }
   ]
 }

@@ -206,6 +206,46 @@ def test_provider_pools_match_model_pools():
                 f"{p['id']}: cost.pool disagrees with {model}'s pool"
 
 
+# ------------------------------------------------------------------- pools
+
+POOLS = REGISTRY["pools"]
+
+
+def test_every_model_pool_resolves():
+    for model_id, m in MODELS.items():
+        assert m["pool"] in POOLS, f"{model_id} draws unknown pool {m['pool']}"
+
+
+def test_every_provider_pool_resolves():
+    for cap, p in PROVIDERS:
+        assert p["cost"]["pool"] in POOLS, \
+            f"{p['id']}: cost.pool {p['cost']['pool']} not in pools table"
+
+
+@pytest.mark.parametrize("pool_id", list(POOLS), ids=list(POOLS))
+def test_pools_entries_are_honest(pool_id):
+    """The availability layer's probe RECIPES are registry claims like any
+    other: each carries method + network flag + source + confidence. Probe
+    RESULTS must never appear here (two-layer rule)."""
+    pool = POOLS[pool_id]
+    assert pool.get("cli"), f"{pool_id} needs its CLI binary name"
+    assert pool.get("kind"), f"{pool_id} needs a kind (subscription/metered/...)"
+    assert pool.get("reset_windows"), f"{pool_id} needs reset_windows"
+    for probe_name in ("auth_probe", "usage_probe"):
+        probe = pool.get(probe_name)
+        assert probe, f"{pool_id} needs {probe_name}"
+        assert probe.get("method"), f"{pool_id}.{probe_name} needs a method"
+        assert isinstance(probe.get("network"), bool), \
+            f"{pool_id}.{probe_name} must declare network true/false"
+        assert probe.get("source"), f"{pool_id}.{probe_name} needs a source"
+        assert probe.get("confidence") in ("exact", "estimated"), \
+            f"{pool_id}.{probe_name} needs confidence exact|estimated"
+    # two-layer rule: no live probe results stored in the registry
+    for banned in ("verdict", "installed", "used_percent", "last_probe"):
+        assert banned not in pool, \
+            f"{pool_id}: '{banned}' looks like a probe RESULT — those are never persisted here"
+
+
 # -------------------------------------------------------------- benchmarks
 
 def test_benchmark_methodology_docs_exist():

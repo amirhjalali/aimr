@@ -11,11 +11,12 @@ making a number up.
 
 ```mermaid
 flowchart LR
-    A[task] --> B{AIMR<br/>name the capability}
+    A[task] --> P[doctor probe<br/>installed? authed? quota?]
+    P --> B{AIMR<br/>name the capability}
     B --> C{worth<br/>delegating?}
-    C -->|"tokens ≫ handoff cost"| D[ranked providers<br/>registry.json]
+    C -->|"tokens ≫ handoff cost"| D[ranked providers<br/>registry.json × live availability]
     C -->|too small| E[do it yourself]
-    D --> F{affordable?<br/>quota weights / $}
+    D --> F{affordable?<br/>quota weights / usage %}
     F -->|yes| G[load lane reference<br/>dispatch, verify artifact]
     F -->|no| D
     G -->|blocked / timeout| D
@@ -28,6 +29,16 @@ flowchart LR
   long-context/multimodal reading. Each capability
   ranks its providers best-first with four contracts: how to invoke, what
   comes back, what it costs, and the benchmarked score that earned the rank.
+- **The doctor** — `scripts/aimr_doctor.py` probes, in under 2 seconds with
+  zero network calls, which provider CLIs are installed, which are
+  authenticated (and on what plan), and which lanes are routable right now —
+  including Codex primary/weekly quota windows read free from its own local
+  session files. `--deep` adds live network probes: Claude 5h/7d/per-model
+  utilization via the OAuth usage endpoint, a live Codex rate-limit read
+  when no local snapshot exists, and gemini/grok liveness. Every failing
+  pool comes with the exact fix command. The agent routes on ground truth
+  instead of guessing — and when the top lane is dead it substitutes
+  *visibly*, never silently.
 - **A model cost catalog** — submodels (fable/opus/sonnet/haiku, gpt-5.5,
   …), their effort levels, API $/MTok, and quota-draw weights for
   subscription pools where per-token dollars are a fiction. Routing picks the
@@ -89,29 +100,36 @@ source); replacing seeds with pack-run suite scores is the standing priority.
 - **Every cost number carries a source and a confidence** (`exact` vs
   `estimated`). Vision-LLM judging only in benchmarks — pixel metrics
   measured r≈0.08 against human preference and are banned.
+- **Probe output follows the same rule**: every usage reading carries its
+  source, its age, and a confidence — and probe *results* never get written
+  into the registry (rankings are the slow-moving quality layer; the doctor
+  is the live availability layer). Probes can lie, so readings are soft
+  signals, never hard gates.
 
 ## Roadmap
 
-- **v2.1 — usage manager (optional extra):** live remaining-quota awareness
-  across accounts — probe-first (Claude Code's local session data is genuinely
-  parseable; other CLIs fall back to estimates), with a statusline one-liner
-  for your prompt. Optional install; core AIMR routes fine without it.
+- ~~v2.1 — usage awareness~~ **shipped** as the doctor (2026-07-13): probe
+  first, report honestly, never a ledger — budget machinery stays banned
+  from core. A cross-provider statusline wrapping `aimr_doctor.py --json`
+  remains an optional future extra.
 - **v2.2 — first pack-run benchmark suite** (`web-research-v1` or
   `longcontext-v1`), retiring the first seeded scores and bringing back the
   suite runner machinery.
-- **More lanes** — see [CONTRIBUTING.md](CONTRIBUTING.md) for the add-a-lane
-  recipe and the honesty bar a new lane has to clear.
+- **More lanes** — the doctor already detects installed-but-unrouted agent
+  CLIs (droid, opencode, agy, …) as candidates; see
+  [CONTRIBUTING.md](CONTRIBUTING.md) for the add-a-lane recipe and the
+  honesty bar a new lane has to clear.
 
 ## Layout
 
 ```
 skills/aimr/            the product: SKILL.md + registry.json + references/ + scripts/
-  SKILL.md              the routing procedure
-  registry.json         models catalog + capability → ranked providers
+  SKILL.md              the routing procedure (step 0: run the doctor)
+  registry.json         models catalog + pools probe metadata + capability → ranked providers
   references/           per-lane invocation discipline and gotchas
-  scripts/              image runner + worktree harness (stdlib-only)
+  scripts/              doctor (availability/usage probe) + image runner + worktree harness
 benchmarks/             methodology, rubric, judge prompt (suite runner returns in v2.2)
-tests/                  schema checks that enforce the honesty rules in CI
+tests/                  schema checks + doctor behavior tests, run in CI
 ```
 
 ## Lineage

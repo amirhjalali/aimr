@@ -5,6 +5,13 @@
 (`longcontext-v1`). Until then, treat quality claims as unverified and verify
 invocation flags against your installed CLI version (`gemini --help`).
 
+**Auth reality (2026-06-18)**: ALL individual Google-account tiers (free,
+AI Pro, AI Ultra) are blocked server-side on every CLI version — this lane
+routes only with `GEMINI_API_KEY`, Vertex, or an org Code Assist seat
+(details + typed exit codes in `setup.md`; the doctor encodes the verdict).
+When the lane is `blocked`/`absent`, the registry's fallback is
+`claude/subagent-bulkread` — text-only, chunked; state the substitution.
+
 ## Why this lane exists
 
 The orchestrating agent's context is the scarcest resource in a multi-agent
@@ -31,8 +38,13 @@ Probe pattern before relying on it (flags and @-syntax have shifted across CLI
 versions):
 
 ```bash
-gemini --version && echo "2+2?" | gemini -p "answer briefly"
+gemini -p "reply ok" --output-format json   # exit 0 = live, 41 = auth-dead
 ```
+
+Prefer `--output-format json` on every headless run: the `stats` object
+carries per-run token counts per model (the lane's usage meter), and errors
+come back typed. **Never send `/stats` as a prompt** — slash commands are
+TUI-only and reach the model as literal text.
 
 ## Routing boundaries
 
@@ -47,8 +59,7 @@ gemini --version && echo "2+2?" | gemini -p "answer briefly"
 
 - Faithfulness on very long inputs (lost-in-the-middle behavior) — the suite
   should plant needle facts at depth.
-- Rate/quota behavior of the free vs paid CLI tiers — daily request caps are
-  documented (see `setup.md`), but real-world exhaustion behavior is not
-  measured.
+- Real-world exhaustion behavior on the API-key path (caps are documented —
+  see `setup.md` — but measured behavior at the cap is not).
 - Exact media-size ceilings per file type on the CLI path (API limits are
   documented; the CLI's wrapping behavior is not).
