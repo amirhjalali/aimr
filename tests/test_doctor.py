@@ -80,18 +80,24 @@ def make_codex_jwt(plan: str = "plus") -> str:
 
 
 def write_codex_state(home: Path, *, plan: str = "plus",
-                      used_5h: float = 12.5, used_7d: float = 40.0) -> None:
+                      used_5h: float = 12.5, used_7d: float = 40.0) -> str:
+    """Fresh, internally-consistent snapshot: events stamped ~now, resets in
+    the future. Returns the snapshot's as_of timestamp string."""
     codex_home = home / ".codex"
     (codex_home / "sessions" / "2026" / "07" / "13").mkdir(parents=True, exist_ok=True)
     (codex_home / "auth.json").write_text(json.dumps({
         "tokens": {"id_token": make_codex_jwt(plan)}
     }))
+    def iso(offset_s: int) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%S.000Z",
+                             time.gmtime(time.time() + offset_s))
+    snap_ts = iso(-60)
     rollout = codex_home / "sessions" / "2026" / "07" / "13" / "rollout-2026-07-13T12-00-00-abc.jsonl"
     events = [
-        {"timestamp": "2026-07-13T11:59:00.000Z", "type": "session_meta", "payload": {}},
-        {"timestamp": "2026-07-13T12:00:00.000Z", "type": "event_msg",
+        {"timestamp": iso(-180), "type": "session_meta", "payload": {}},
+        {"timestamp": iso(-120), "type": "event_msg",
          "payload": {"type": "token_count", "info": {}, "rate_limits": None}},
-        {"timestamp": "2026-07-13T12:01:00.000Z", "type": "event_msg",
+        {"timestamp": snap_ts, "type": "event_msg",
          "payload": {"type": "token_count", "info": {},
                      "rate_limits": {
                          "primary": {"used_percent": used_5h, "window_minutes": 300,
@@ -102,6 +108,7 @@ def write_codex_state(home: Path, *, plan: str = "plus",
                      }}},
     ]
     rollout.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    return snap_ts
 
 
 # ------------------------------------------------------------------- tests
@@ -196,7 +203,7 @@ def test_codex_ready_with_rollout_quota(tmp_path):
     make_stub(bin_dir, "codex",
               'if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi\n'
               'echo "codex-cli 9.9.9"\nexit 0\n')
-    write_codex_state(home, plan="plus", used_5h=12.5, used_7d=40.0)
+    snap_ts = write_codex_state(home, plan="plus", used_5h=12.5, used_7d=40.0)
     report, rc = run_doctor(home, bin_dir)
     assert rc == 0
     codex = report["pools"]["codex-sub"]
@@ -206,7 +213,7 @@ def test_codex_ready_with_rollout_quota(tmp_path):
     usage = codex["usage"]
     assert usage["source"] == "rollout-scan"
     assert usage["network"] is False
-    assert usage["as_of"] == "2026-07-13T12:01:00.000Z"
+    assert usage["as_of"] == snap_ts
     by_name = {w["name"]: w for w in usage["windows"]}
     assert by_name["5h"]["used_percent"] == 12.5
     assert by_name["7d"]["used_percent"] == 40.0
@@ -467,6 +474,402 @@ def test_deep_claude_malformed_cache_degrades_not_crashes(tmp_path):
     assert rc == 0, "malformed cache must not crash the doctor"
     usage = report["pools"]["claude-sub"]["usage"]
     assert usage["windows"], "wrong-shape cache is a miss; fetch must proceed"
+
+
+# ------------------------------------------------------------ --usage gauge
+# The usage lens: free readouts only (claude OAuth via file:// override,
+# codex rollout scan) — never liveness probes, never version subprocesses.
+
+def write_usage_fixture(path: Path, *, used_5h: float, resets_5h_s: int,
+                        used_7d: float, resets_7d_s: int,
+                        limits: list | None = None) -> str:
+    def iso(offset_s: int) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset_s))
+    path.write_text(json.dumps({
+        "five_hour": {"utilization": used_5h, "resets_at": iso(resets_5h_s)},
+        "seven_day": {"utilization": used_7d, "resets_at": iso(resets_7d_s)},
+        "limits": limits or [],
+        "extra_usage": {"is_enabled": False},
+    }))
+    return path.as_uri()
+
+
+def test_usage_mode_trims_report_and_skips_liveness_and_versions(tmp_path):
+    """--usage may spawn codex (auth read + free app-server readout) but
+    must NEVER touch claude/gemini/grok binaries (no version subprocesses,
+    no liveness prompts — those can draw quota). Canary stubs record every
+    invocation. The JSON trims to pools only."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    for cli in ("claude", "gemini", "grok", "codex"):
+        make_stub(bin_dir, cli,
+                  f'echo "$@" >> "{tmp_path}/canary-{cli}"\necho "stub 1.0.0"\nexit 0\n')
+    write_claude_creds(home, FUTURE_MS)
+    url = write_usage_fixture(tmp_path / "usage.json", used_5h=10, resets_5h_s=3600,
+                              used_7d=20, resets_7d_s=3 * 86400)
+    report, rc = run_doctor(home, bin_dir, "--usage",
+                            env_extra={"AIMR_CLAUDE_USAGE_URL": url,
+                                       "GEMINI_API_KEY": SECRET_MARKER})
+    assert rc == 0
+    assert report["mode"] == "usage"
+    assert "capabilities" not in report and "unrouted_clis_detected" not in report
+    assert report["pools"]["claude-sub"]["usage"]["windows"]
+    for cli in ("claude", "gemini", "grok"):
+        assert not (tmp_path / f"canary-{cli}").exists(), \
+            f"usage mode must not spawn {cli} at all"
+    codex_calls = (tmp_path / "canary-codex").read_text().splitlines()
+    assert all(c.startswith(("login", "app-server")) for c in codex_calls), \
+        f"unexpected codex invocations in usage mode: {codex_calls}"
+
+
+def test_usage_mode_derived_fields_and_headroom(tmp_path):
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    write_claude_creds(home, FUTURE_MS)
+    # 5h: 62% used, resets in 2h -> 60% elapsed -> pace ~1.03
+    # 7d: 91% used, resets in 3d -> ~57% elapsed -> pace ~1.6, critical
+    url = write_usage_fixture(
+        tmp_path / "usage.json", used_5h=62.0, resets_5h_s=2 * 3600,
+        used_7d=91.0, resets_7d_s=3 * 86400,
+        limits=[{"kind": "weekly_all", "percent": 91, "severity": "elevated"},
+                {"kind": "weekly_scoped", "percent": 9,
+                 "resets_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                            time.gmtime(time.time() + 3 * 86400)),
+                 "scope": {"model": {"display_name": "Fable"}}}])
+    report, rc = run_doctor(home, bin_dir, "--usage", "--pool", "claude-sub",
+                            env_extra={"AIMR_CLAUDE_USAGE_URL": url})
+    assert rc == 0
+    usage = report["pools"]["claude-sub"]["usage"]
+    by_name = {w["name"]: w for w in usage["windows"]}
+    w5, w7 = by_name["5h"], by_name["7d"]
+    assert w5["left_percent"] == 38.0
+    assert 7100 < w5["resets_in_seconds"] <= 7200
+    assert 0.95 < w5["pace"] < 1.1
+    assert w5["headroom"] == "ok"
+    assert w7["headroom"] == "critical"
+    assert 1.5 < w7["pace"] < 1.7
+    # burning faster than the window: projected empty before the reset
+    assert w7["time_to_exhaustion_seconds"] < w7["resets_in_seconds"]
+    # the server's own classification is passed through verbatim
+    assert w7["severity"] == "elevated"
+    assert "severity" not in w5
+    assert by_name["7d:Fable"]["headroom"] == "ok"
+    # pool headroom = worst window, naming the driver
+    assert usage["headroom"] == {"level": "critical", "window": "7d",
+                                 "used_percent": 91.0}
+
+
+def test_usage_mode_young_window_suppresses_pace(tmp_path):
+    """<5% of the window elapsed -> the pace denominator is noise; the
+    field must be absent, not a wild number (the CodexBar suppression rule)."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    write_claude_creds(home, FUTURE_MS)
+    url = write_usage_fixture(tmp_path / "usage.json",
+                              used_5h=4.0, resets_5h_s=int(4.96 * 3600),
+                              used_7d=50.0, resets_7d_s=7 * 86400 - 60)
+    report, _ = run_doctor(home, bin_dir, "--usage", "--pool", "claude-sub",
+                           env_extra={"AIMR_CLAUDE_USAGE_URL": url})
+    by_name = {w["name"]: w for w in report["pools"]["claude-sub"]["usage"]["windows"]}
+    assert "pace" not in by_name["5h"]
+    assert "pace" not in by_name["7d"]
+    assert by_name["5h"]["left_percent"] == 96.0  # left/reset still derived
+
+
+def test_usage_mode_already_reset_reading_is_flagged(tmp_path):
+    """A reading whose window reset in the past is stale-high: flag it,
+    suppress headroom (unknowable), never show a countdown."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    write_claude_creds(home, FUTURE_MS)
+    url = write_usage_fixture(tmp_path / "usage.json",
+                              used_5h=97.0, resets_5h_s=-600,
+                              used_7d=10.0, resets_7d_s=3 * 86400)
+    report, _ = run_doctor(home, bin_dir, "--usage", "--pool", "claude-sub",
+                           env_extra={"AIMR_CLAUDE_USAGE_URL": url})
+    by_name = {w["name"]: w for w in report["pools"]["claude-sub"]["usage"]["windows"]}
+    w5 = by_name["5h"]
+    assert w5["already_reset"] is True
+    assert "resets_in_seconds" not in w5 and "pace" not in w5
+    assert w5["headroom"] is None
+    # the stale-high 97% must not drive pool headroom to critical
+    assert report["pools"]["claude-sub"]["usage"]["headroom"]["level"] == "ok"
+
+
+def test_usage_mode_human_render(tmp_path):
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    write_claude_creds(home, FUTURE_MS)
+    url = write_usage_fixture(tmp_path / "usage.json", used_5h=62.0,
+                              resets_5h_s=2 * 3600, used_7d=91.0,
+                              resets_7d_s=3 * 86400)
+    proc = subprocess.run(
+        [sys.executable, str(DOCTOR), "--usage"],
+        capture_output=True, text=True, timeout=60, check=False,
+        env={"HOME": str(home), "PATH": str(bin_dir),
+             "AIMR_CACHE_DIR": str(home / ".aimr-cache"),
+             "CODEX_HOME": str(home / ".codex"), "GROK_HOME": str(home / ".grok"),
+             "AIMR_CLAUDE_USAGE_URL": url},
+    )
+    assert proc.returncode == 0
+    assert SECRET_MARKER not in proc.stdout + proc.stderr
+    out = proc.stdout
+    assert "AIMR gauge" in out
+    assert "█" in out and "░" in out
+    assert "% left" in out and "resets in" in out
+    assert "pace" in out and "CRITICAL" in out
+    assert "headroom:" in out and "claude-sub CRITICAL" in out
+    # absent pools render one honest line, not a crash
+    assert "codex-sub" in out
+
+
+def test_usage_mode_empty_machine_exits_zero(tmp_path):
+    """The gauge doesn't assess routability: no readouts is still a valid
+    report (exit 0), unlike the full doctor's exit-2 contract."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    report, rc = run_doctor(home, bin_dir, "--usage")
+    assert rc == 0
+    assert report["mode"] == "usage"
+    proc = subprocess.run(
+        [sys.executable, str(DOCTOR), "--usage"],
+        capture_output=True, text=True, timeout=60, check=False,
+        env={"HOME": str(home), "PATH": str(bin_dir),
+             "AIMR_CACHE_DIR": str(home / ".aimr-cache"),
+             "CODEX_HOME": str(home / ".codex"), "GROK_HOME": str(home / ".grok")},
+    )
+    assert proc.returncode == 0
+    assert "no live quota readings" in proc.stdout
+
+
+def test_usage_and_deep_are_mutually_exclusive():
+    proc = subprocess.run([sys.executable, str(DOCTOR), "--usage", "--deep"],
+                          capture_output=True, text=True, timeout=30, check=False)
+    assert proc.returncode == 2  # argparse usage error
+    assert "not allowed with" in proc.stderr
+
+
+def test_codex_middle_era_resets_in_seconds_shape(tmp_path):
+    """0.41–0.42-era rollouts carry resets_in_seconds RELATIVE to the event
+    instead of epoch resets_at — recoverable via the snapshot timestamp."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    make_stub(bin_dir, "codex",
+              'if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi\n'
+              'echo "codex-cli 9.9.9"\nexit 0\n')
+    sessions = home / ".codex" / "sessions" / "2026" / "01" / "05"
+    sessions.mkdir(parents=True)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 120))
+    (sessions / "rollout-2026-01-05T09-00-00-mid.jsonl").write_text(json.dumps({
+        "timestamp": ts, "type": "event_msg",
+        "payload": {"type": "token_count", "info": {},
+                    "rate_limits": {
+                        "primary": {"used_percent": 30.0, "window_minutes": 300,
+                                    "resets_in_seconds": 7200}}}}) + "\n")
+    report, _ = run_doctor(home, bin_dir)
+    w5 = report["pools"]["codex-sub"]["usage"]["windows"][0]
+    assert w5["resets_at"], "relative reset must be recovered from the event timestamp"
+    # reset = event_ts + 7200s, event was 120s ago -> countdown ~7080s
+    assert 6900 < w5["resets_in_seconds"] <= 7080
+    assert w5["left_percent"] == 70.0
+
+
+def test_enrichment_applies_to_codex_windows_in_local_mode(tmp_path):
+    """Derived fields ride on every window everywhere — the local codex
+    rollout scan included (window_minutes comes from the rollout itself)."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    make_stub(bin_dir, "codex",
+              'if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi\n'
+              'echo "codex-cli 9.9.9"\nexit 0\n')
+    write_codex_state(home, used_5h=12.5, used_7d=40.0)
+    report, _ = run_doctor(home, bin_dir)  # default local mode
+    by_name = {w["name"]: w for w in report["pools"]["codex-sub"]["usage"]["windows"]}
+    w5 = by_name["5h"]
+    assert w5["left_percent"] == 87.5
+    assert isinstance(w5["resets_in_seconds"], int)
+    # elapsed = 300m - 60m = 80% of window; 12.5% used -> pace ~0.16
+    assert 0.1 < w5["pace"] < 0.2
+    assert w5["headroom"] == "ok"
+    assert report["pools"]["codex-sub"]["usage"]["headroom"]["level"] == "ok"
+
+
+# --------------------------------------------- review-round regressions
+
+APPSERVER_STUB = (
+    'if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi\n'
+    'if [ "$1" = "app-server" ]; then\n'
+    '  echo appserver >> "{canary}"\n'
+    '  cat > /dev/null\n'
+    '  echo \'{{"jsonrpc":"2.0","id":2,"result":{{"rateLimits":{{"primary":'
+    '{{"usedPercent":55,"windowDurationMins":300,"resetsAt":{reset}}}}},'
+    '"planType":"plus"}}}}\'\n'
+    '  exit 0\n'
+    'fi\n'
+    'echo "codex-cli 9.9.9"\nexit 0\n'
+)
+
+
+def write_stale_rollout(home: Path, days_old: int = 8) -> None:
+    """A snapshot whose every window reset long ago (codex unused for days)."""
+    sessions = home / ".codex" / "sessions" / "2026" / "07" / "01"
+    sessions.mkdir(parents=True, exist_ok=True)
+    old = time.time() - days_old * 86400
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(old))
+    (sessions / "rollout-2026-07-01T09-00-00-old.jsonl").write_text(json.dumps({
+        "timestamp": ts, "type": "event_msg",
+        "payload": {"type": "token_count", "info": {},
+                    "rate_limits": {
+                        "primary": {"used_percent": 80.0, "window_minutes": 300,
+                                    "resets_at": int(old) + 3600},
+                        "secondary": {"used_percent": 60.0, "window_minutes": 10080,
+                                      "resets_at": int(old) + 86400}}}}) + "\n")
+
+
+def test_usage_mode_stale_snapshot_falls_through_to_appserver(tmp_path):
+    """A rollout snapshot whose windows have all reset must NOT suppress the
+    free app-server readout in usage mode (review finding: agents got no
+    codex runway data despite a zero-cost fresh readout being available)."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    canary = tmp_path / "canary-appserver"
+    make_stub(bin_dir, "codex", APPSERVER_STUB.format(
+        canary=canary, reset=int(time.time()) + 3600))
+    write_stale_rollout(home)
+    report, rc = run_doctor(home, bin_dir, "--usage", "--pool", "codex-sub")
+    assert rc == 0
+    usage = report["pools"]["codex-sub"]["usage"]
+    assert usage["source"] == "app-server", \
+        "stale snapshot must fall through to the live readout"
+    w5 = usage["windows"][0]
+    assert w5["used_percent"] == 55
+    assert w5["headroom"] == "ok"
+    # …and the readout is politeness-cached: a second run must not respawn
+    report2, _ = run_doctor(home, bin_dir, "--usage", "--pool", "codex-sub")
+    assert report2["pools"]["codex-sub"]["usage"]["source"] == "app-server"
+    assert canary.read_text().count("appserver") == 1, \
+        "second run within the TTL must be served from the cache"
+
+
+def test_local_mode_keeps_stale_snapshot_without_spawning(tmp_path):
+    """Default local mode stays zero-spawn beyond the auth read: a stale
+    snapshot is still served (flagged already_reset), never app-server."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    canary = tmp_path / "canary-appserver"
+    make_stub(bin_dir, "codex", APPSERVER_STUB.format(
+        canary=canary, reset=int(time.time()) + 3600))
+    write_stale_rollout(home)
+    report, _ = run_doctor(home, bin_dir, "--pool", "codex-sub")
+    usage = report["pools"]["codex-sub"]["usage"]
+    assert usage["source"] == "rollout-scan"
+    assert all(w["already_reset"] for w in usage["windows"])
+    assert usage["headroom"] is None
+    assert not canary.exists(), "local mode must not spawn app-server"
+
+
+def test_pace_uses_reading_timebase_not_wall_clock(tmp_path):
+    """used_percent is a fact as of the snapshot; pace must measure elapsed
+    there too. Snapshot 3h ago, 30% into a 5h window, 40% used -> pace
+    ~1.33 (burning hot), NOT ~0.44 (the wall-clock-now understatement).
+    The exhaustion projection expired hours ago -> omitted, not negative."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    make_stub(bin_dir, "codex",
+              'if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi\n'
+              'echo "codex-cli 9.9.9"\nexit 0\n')
+    sessions = home / ".codex" / "sessions" / "2026" / "07" / "14"
+    sessions.mkdir(parents=True)
+    snap_time = time.time() - 3 * 3600  # 3h old reading
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(snap_time))
+    (sessions / "rollout-2026-07-14T22-00-00-hot.jsonl").write_text(json.dumps({
+        "timestamp": ts, "type": "event_msg",
+        "payload": {"type": "token_count", "info": {},
+                    "rate_limits": {
+                        # at snapshot time: 90m elapsed of 300m, reset 210m out
+                        "primary": {"used_percent": 40.0, "window_minutes": 300,
+                                    "resets_at": int(snap_time) + 210 * 60}}}}) + "\n")
+    report, _ = run_doctor(home, bin_dir, "--pool", "codex-sub")
+    w5 = report["pools"]["codex-sub"]["usage"]["windows"][0]
+    assert 1.25 < w5["pace"] < 1.45, f"pace {w5['pace']} must use the reading's timebase"
+    # empty was projected 135m after a 180m-old reading -> already in the past
+    assert "time_to_exhaustion_seconds" not in w5
+    # the reset countdown IS a now-fact: 210m from snapshot = 30m from now
+    assert 1700 < w5["resets_in_seconds"] <= 1800
+
+
+def test_usage_mode_creds_without_token_get_actionable_note(tmp_path):
+    """Under --usage, credentials lacking an accessToken must not produce
+    the circular 'needs --usage or --deep' advice."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    d = home / ".claude"; d.mkdir(parents=True)
+    (d / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"expiresAt": FUTURE_MS, "subscriptionType": "max"}}))
+    report, _ = run_doctor(home, bin_dir, "--usage", "--pool", "claude-sub")
+    note = report["pools"]["claude-sub"]["usage"]["note"]
+    assert "--usage" not in note and "--deep" not in note
+    assert "accessToken" in note
+    # local mode keeps the flag pointer (there the advice is not circular)
+    report2, _ = run_doctor(home, bin_dir, "--pool", "claude-sub")
+    assert "--usage" in report2["pools"]["claude-sub"]["usage"]["note"]
+
+
+def test_gauge_footer_and_bar_honesty(tmp_path):
+    """97.6% used renders a not-quite-full bar; an all-already-reset machine
+    says 'headroom: unknown', not the contradictory 'no live quota
+    readings' beneath rendered readings."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    write_claude_creds(home, FUTURE_MS)
+    url = write_usage_fixture(tmp_path / "usage.json", used_5h=97.6,
+                              resets_5h_s=3600, used_7d=1.2,
+                              resets_7d_s=5 * 86400)
+    env = {"HOME": str(home), "PATH": str(bin_dir),
+           "AIMR_CACHE_DIR": str(home / ".aimr-cache"),
+           "CODEX_HOME": str(home / ".codex"), "GROK_HOME": str(home / ".grok"),
+           "AIMR_CLAUDE_USAGE_URL": url}
+    proc = subprocess.run([sys.executable, str(DOCTOR), "--usage"],
+                          capture_output=True, text=True, timeout=60,
+                          check=False, env=env)
+    assert "█" * 20 not in proc.stdout, "97.6% must not render as a full bar"
+    assert "░" * 20 not in proc.stdout, "1.2% must not render as an empty bar"
+    # now the all-reset machine: readings exist, headroom is unknown
+    bin2 = tmp_path / "bin2"; bin2.mkdir()
+    make_stub(bin2, "codex",
+              'if [ "$1" = "login" ]; then echo "Not logged in" >&2; exit 1; fi\n'
+              'echo "codex-cli 9.9.9"\nexit 0\n')
+    home2 = tmp_path / "home2"; home2.mkdir()
+    write_stale_rollout(home2)
+    proc2 = subprocess.run([sys.executable, str(DOCTOR), "--usage", "--pool", "codex-sub"],
+                           capture_output=True, text=True, timeout=60, check=False,
+                           env={"HOME": str(home2), "PATH": str(bin2),
+                                "AIMR_CACHE_DIR": str(home2 / ".aimr-cache"),
+                                "CODEX_HOME": str(home2 / ".codex"),
+                                "GROK_HOME": str(home2 / ".grok")})
+    assert "headroom: unknown" in proc2.stdout
+    assert "no live quota readings" not in proc2.stdout
+
+
+def test_naive_iso_resets_parse_as_utc(tmp_path):
+    """Timezone-naive ISO resets_at must be read as UTC even on a machine
+    with a far-from-UTC local timezone (else already_reset misfires)."""
+    home = tmp_path / "home"; bin_dir = tmp_path / "bin"
+    home.mkdir(); bin_dir.mkdir()
+    write_claude_creds(home, FUTURE_MS)
+    naive_future = time.strftime("%Y-%m-%dT%H:%M:%S",
+                                 time.gmtime(time.time() + 2 * 3600))  # no Z
+    fixture = tmp_path / "usage.json"
+    fixture.write_text(json.dumps({
+        "five_hour": {"utilization": 50.0, "resets_at": naive_future},
+        "seven_day": {"utilization": 10.0, "resets_at": None},
+    }))
+    report, _ = run_doctor(home, bin_dir, "--usage", "--pool", "claude-sub",
+                           env_extra={"AIMR_CLAUDE_USAGE_URL": fixture.as_uri(),
+                                      "TZ": "Asia/Tokyo"})  # UTC+9, no DST
+    w5 = report["pools"]["claude-sub"]["usage"]["windows"][0]
+    assert "already_reset" not in w5, "naive UTC time misread as local (+9h skew)"
+    assert 6900 < w5["resets_in_seconds"] <= 7200
 
 
 def test_deep_claude_backoff_after_failed_fetch(tmp_path):

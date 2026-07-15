@@ -58,7 +58,8 @@ tests/                    registry honesty checks (run in CI).
 
 - Tests: `python3 -m pytest tests/` (pytest is the only dependency; Python 3.10+)
 - Doctor (availability/usage report): `python3 skills/aimr/scripts/aimr_doctor.py`
-  (`--json` for agents, `--deep` for live quota)
+  (`--json` for agents, `--usage` for the quota gauge — free readouts only,
+  `--deep` for live quota + liveness)
 - Image lane smoke: `python3 skills/aimr/scripts/codex_image_gen.py --help`
 
 ## Non-negotiable conventions
@@ -91,4 +92,8 @@ tests/                    registry honesty checks (run in CI).
   hard budget gates — the doctor reports, the routing skill decides, and
   substitutions are always stated, never silent. Probe readings carry
   source + as-of + confidence, and are soft signals (probes can lie).
-  A statusline remains an optional future extra.
+  The gauge (`--usage`, shipped 2026-07-15) derives left/reset/pace/headroom
+  from a SINGLE reading — the only burn signal compatible with the
+  no-ledger rule; percent is the honest ceiling (no absolute token counts
+  exist for subscription pools). A statusline remains an optional future
+  extra (now a thin wrap of `--usage --json`).

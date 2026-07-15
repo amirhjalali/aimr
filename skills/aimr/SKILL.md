@@ -19,10 +19,11 @@ wherever it is installed — resolve it before dispatching.
    `python3 <skill-dir>/scripts/aimr_doctor.py --json`
    (local-only, <2s, zero network, zero quota). It reports, per pool:
    installed / authenticated / plan, any locally-readable quota snapshot,
-   and a per-capability rollup of what is routable right now. Add `--deep`
-   when quota matters for the routing decision (live 5h/7d Claude
-   utilization, codex live rate limits; note: the grok liveness probe draws
-   real quota). Route only among lanes the report marks `ready` —
+   and a per-capability rollup of what is routable right now. Three speeds:
+   default (local-only), `--usage` (the quota gauge: free readouts only —
+   no liveness probes, no quota drawn), `--deep` (everything, incl.
+   gemini/grok liveness; note: the grok probe draws real quota). Route only
+   among lanes the report marks `ready` —
    **and when the top-ranked provider is unavailable, SAY which lane you
    substituted and why; never silently downgrade.** If the script itself
    can't run, fall back to the manual probes in `references/setup.md`.
@@ -56,7 +57,22 @@ wherever it is installed — resolve it before dispatching.
    LOWEST-weight lane that clears the quality bar, and prefer a lower-ranked
    provider you can afford over a top-ranked one you can't. The doctor's
    usage numbers feed this step: a pool at ≥90% of a window whose reset is
-   far off means prefer the next lane — and say that's why. Probes can lie
+   far off means prefer the next lane — and say that's why. Mid-session,
+   re-check runway cheaply before any sizable delegation:
+   `aimr_doctor.py --usage --json` (free, zero quota; readouts are
+   politeness-cached ~3min — the first check on a machine with no live
+   codex session file may spawn a brief local app-server probe). Per window it
+   derives, from a single reading: `left_percent`, `resets_in_seconds`,
+   `headroom` (percent-only: ≥70 tight, ≥90 critical — a critical window
+   minutes from reset is self-healing, so always read `resets_in_seconds`
+   beside it), and `pace` (fraction used ÷ fraction of window elapsed;
+   >1× burns faster than the window replenishes, and
+   `time_to_exhaustion_seconds < resets_in_seconds` means the pool empties
+   before it refills — shift bulk work to another lane and say so). When
+   the endpoint ships its own `severity`, trust it over the derived label.
+   The inverse signal routes too: a weekly window well under 50% with its
+   reset near is use-it-or-lose-it capacity — prefer that pool for bulk
+   work. Probes can lie
    (documented upstream bugs): treat readings as soft signals, not hard
    gates. Weights are defaults, not limits: judge the output, not the price
    tag — if a cheap lane misses the bar, redo one rung up without asking.

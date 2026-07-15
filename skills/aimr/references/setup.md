@@ -9,26 +9,84 @@ script can't run.
 ```bash
 python3 <skill-dir>/scripts/aimr_doctor.py           # human table
 python3 <skill-dir>/scripts/aimr_doctor.py --json    # for routing decisions
-python3 <skill-dir>/scripts/aimr_doctor.py --deep    # + live quota probes
+python3 <skill-dir>/scripts/aimr_doctor.py --usage   # quota gauge (free readouts only)
+python3 <skill-dir>/scripts/aimr_doctor.py --deep    # everything: usage + liveness
 ```
 
 - **Default run is local-only**: <2s, zero network, zero tokens, zero quota.
   It checks binaries + versions, credential files (expiry/plan fields only —
   secrets are never printed), and the codex rollout quota snapshot.
-- **`--deep` adds network probes**: the Claude OAuth usage endpoint
-  (politeness-cached 180s; the endpoint has a documented stuck-429 bug),
-  codex `app-server` live rate limits (only when no local snapshot exists),
-  and gemini/grok one-prompt liveness checks — **the grok probe draws the
-  shared weekly SuperGrok pool**, the report says so when it runs.
+- **`--usage` is the gauge** — "how much used, how much left, when does it
+  reset". It adds ONLY the free quota readouts (the Claude OAuth usage
+  endpoint; codex rollout scan, falling through to `app-server` when no
+  snapshot still describes a live window — both network readouts
+  politeness-cached 180s) and skips liveness probes *and* version
+  subprocesses, so it stays quick and draws zero quota. `--json` trims to
+  pools only — `mode` is the shape discriminator, so consumers must not
+  expect `capabilities` in a usage-mode report.
+- **`--deep` adds everything**: the usage readouts above plus gemini/grok
+  one-prompt liveness checks — **the grok probe draws the shared weekly
+  SuperGrok pool**, the report says so when it runs.
 - Verdicts: `ready | unauthenticated | auth-expired | blocked | absent |
   unknown`. Only `ready` lanes are routed; every failing pool carries a
   `fix` command. Exit codes: 0 = something routable, 2 = nothing routable,
-  1 = the doctor itself broke.
+  1 = the doctor itself broke (`--usage`: 0 = gauge produced, 1 = broke —
+  it does not assess routability).
+
+### Reading the gauge
+
+```
+  claude-sub  ready · max (default_claude_max_5x) · oauth-endpoint (reading 12s old)
+    5h       ████████████░░░░░░░░   62.0% used ·  38.0% left  ·  resets in 1h59m  ·  pace 1.0x
+    7d       ██████████████████░░   91.0% used ·   9.0% left  ·  resets in 2d23h  ·  pace 1.6x — empty in ~9h29m at this rate, before the reset  ·  CRITICAL
+
+  headroom: claude-sub CRITICAL (7d at 91.0% used)
+```
+
+Every derived field comes from a SINGLE reading — no history, no ledger,
+nothing persisted, nothing gated (the no-budget-machinery rule):
+
+- `left_percent` = 100 − used. Percent is the honest ceiling: neither
+  Claude nor Codex exposes absolute token counts for subscription pools
+  (verified 2026-07-15) — anyone quoting "tokens left" on a flat plan is
+  reconstructing from local history and guessing the cap.
+- `resets_in_seconds` — countdown to the window reset. A reading whose
+  reset already passed is flagged `already_reset` (stale-high; true usage
+  is lower) and excluded from headroom.
+- `pace` = fraction-used ÷ fraction-of-window-elapsed (window start
+  inferred as `resets_at` − window length). >1× burns faster than the
+  window replenishes; `time_to_exhaustion_seconds` extrapolates the same
+  line, and the renderer warns when it lands before the reset. Linear-burn
+  is a stated heuristic (same even-consumption model CodexBar ships;
+  suppressed below 5% window elapsed) — treat as `confidence: derived`.
+  It is **strongest on the Claude 5h window** (session-anchored; though
+  `resets_at` is snapped to the top of the hour, so the inferred start is
+  ±1h) and **weakest on weekly windows**: Claude's 7d utilization has been
+  observed stepping down ~every 72h mid-window while `resets_at` sat a
+  week out (community polling data, 2026-06), and codex windows are
+  rolling — there `resets_at` marks when the constraint clears, not when
+  the window started. Read weekly pace as order-of-magnitude, not a
+  forecast.
+- `headroom` — percent-only labels at the field-consensus thresholds
+  (≥70 tight, ≥90 critical — Anthropic's statusline docs and ccusage use
+  the same pair). Deliberately blind to reset proximity: a critical window
+  minutes from reset is self-healing, so read `resets_in_seconds` beside
+  it. Pool-level `usage.headroom` names the worst window.
+- `severity` — the Claude endpoint's own per-limit classification, passed
+  through verbatim when present. Provider ground truth: prefer it over the
+  derived label when they disagree.
+
+In-session alternative: Claude Code pipes `rate_limits.five_hour/seven_day
+.used_percentage` + `resets_at` (epoch s) to statusline commands — same
+account numbers, no extra fetch. The gauge exists for the out-of-session
+and cross-pool view.
 - **Freshness**: install/auth are probed every run and never persisted;
   claude usage is cached 180s (30min backoff after a failed fetch) in a
   per-user temp dir (`aimr-<uid>`, mode 0700; `AIMR_CACHE_DIR` to
   relocate); codex usage is as fresh as the
-  last codex turn on this machine — the report shows the snapshot age.
+  last codex turn on this machine — the report shows the snapshot age —
+  and when no snapshot window is still live, usage/deep modes fall through
+  to the `app-server` readout (cached 180s in the same dir).
   Probe results are NEVER written into registry.json (the registry is the
   slow-moving quality layer; the doctor is the live availability layer).
 - **Probes can lie** (vendors' own endpoints have open bugs): treat usage
@@ -50,8 +108,8 @@ python3 <skill-dir>/scripts/aimr_doctor.py --deep    # + live quota probes
   (e.g. a separate Fable limit). These are **account-wide, server-metered
   across all machines and surfaces** — local session JSONLs and
   `stats-cache.json` are per-machine *history*, not quota. The only quota
-  truths are the OAuth usage endpoint (`--deep`) and the statusline's
-  `rate_limits` stdin block during a live session.
+  truths are the OAuth usage endpoint (`--usage` / `--deep`) and the
+  statusline's `rate_limits` stdin block during a live session.
 - From other CLIs: `claude -p --model <tier> --effort <level>` needs only
   the `claude` CLI logged in.
 

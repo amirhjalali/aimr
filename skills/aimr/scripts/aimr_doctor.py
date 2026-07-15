@@ -10,12 +10,18 @@ routable right now. The registry (quality layer: rankings, scores, weights)
 moves slowly; this probe (availability layer) runs fresh every time and its
 results are never written back into the registry.
 
-Two speeds
-----------
+Three speeds
+------------
 - Default: LOCAL ONLY. Binary + version checks, credential-file reads, and
   the codex rollout-file quota snapshot (free to read; it mirrors server
   rate-limit headers as of the last codex turn on this machine). Zero
   network calls, zero tokens, zero quota drawn.
+- --usage: the GAUGE — "how much have I used, how much is left, when does
+  it reset". Adds ONLY the free quota readouts (claude OAuth usage GET,
+  codex app-server rate-limits when no rollout snapshot exists) and skips
+  liveness probes AND version subprocesses, so it stays quick. No tokens,
+  no quota drawn. Renders per-window used/left/reset bars plus derived
+  pace and headroom; --json trims to pools only (no capability rollup).
 - --deep: adds network probes, each with its own timeout:
     claude  GET api.anthropic.com/api/oauth/usage (politeness-cached 180s,
             30min error backoff — the endpoint has a known stuck-429 bug)
@@ -42,15 +48,32 @@ install/version : probed every run, never persisted
 auth state      : probed every run (local file reads), never persisted
 claude usage    : politeness cache (180s success / 30min error backoff),
                   stored under the system temp dir (AIMR_CACHE_DIR to move)
-codex usage     : as fresh as the last codex turn; snapshot timestamp shown
+codex usage     : as fresh as the last codex turn; snapshot timestamp shown.
+                  When no snapshot describes a live window, usage/deep modes
+                  fall through to `codex app-server` (politeness-cached 180s
+                  in the same temp dir)
 registry scores : suite+date in registry.json — not this script's business
+
+JSON shape: `mode` is the shape discriminator — usage-mode reports carry
+pools only (no capabilities / unrouted_clis_detected keys); local and deep
+reports carry all sections. schema_version covers field semantics, not
+which sections a mode includes.
 
 Exit codes: 0 = report produced, at least one capability routable;
             2 = report produced, NOTHING routable;
             1 = the doctor itself failed.
+            (--usage mode does not assess routability: 0 = gauge produced,
+            1 = doctor failure.)
 
 Usage numbers always carry source + as-of + confidence (the registry
 honesty rule applied to probe output); unknown is null, never a guess.
+Derived window fields (left_percent, resets_in_seconds, pace,
+time_to_exhaustion_seconds, headroom) are computed from a SINGLE reading —
+no history is kept, nothing is persisted, nothing gates. Pace assumes
+linear burn across the window (a stated heuristic, confidence: derived);
+headroom labels are percent-only (>=90 critical, >=70 tight) — read
+resets_in_seconds beside them: a critical window minutes from reset is
+self-healing. The doctor reports; the routing skill decides.
 """
 from __future__ import annotations
 
@@ -73,9 +96,21 @@ SCHEMA_VERSION = 1
 CLAUDE_USAGE_URL = os.environ.get(
     "AIMR_CLAUDE_USAGE_URL", "https://api.anthropic.com/api/oauth/usage"
 )
+# The User-Agent is load-bearing on this endpoint: non-claude-code UAs land
+# in an aggressively rate-limited bucket (claude-code#30930 ecosystem
+# consensus, checked 2026-07-15). Override with AIMR_CLAUDE_UA if it drifts.
+CLAUDE_USAGE_UA = os.environ.get("AIMR_CLAUDE_UA", "claude-code/2.1.210")
 CLAUDE_CACHE_TTL_S = 180
 CLAUDE_ERROR_BACKOFF_S = 1800
 LOCK_STALE_S = 30
+
+DERIVED_FIELDS_NOTE = (
+    "left/resets_in/pace/headroom are single-reading derivations "
+    "(confidence: derived, never gates). Pace assumes even burn with the "
+    "window start inferred from resets_at — weakest on weekly windows, "
+    "whose upstream mechanics are contested; on rolling windows resets_at "
+    "marks when the constraint clears, not when the window started."
+)
 
 # Agent CLIs we detect but do not route — candidate lanes, presence-only.
 UNROUTED_CLIS = (
@@ -155,8 +190,121 @@ def _humanize_minutes(minutes: float | int | None, fallback: str) -> str:
     return f"{int(minutes)}m"
 
 
-def _window(name: str, used_percent: float | None, resets_at_iso: str | None) -> dict:
-    return {"name": name, "used_percent": used_percent, "resets_at": resets_at_iso}
+def _humanize_seconds(seconds: float | int | None) -> str:
+    """Compact countdown: 45s, 12m, 1h40m, 3d2h."""
+    if not isinstance(seconds, (int, float)) or seconds < 0:
+        return "?"
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        h, m = divmod(s // 60, 60)
+        return f"{h}h{m}m" if m else f"{h}h"
+    d, h = divmod(s // 3600, 24)
+    return f"{d}d{h}h" if h else f"{d}d"
+
+
+def _parse_epoch_or_iso(value) -> float | None:
+    """Timestamp as epoch seconds; tolerates epoch-s, epoch-ms, ISO strings.
+    Timezone-naive ISO strings are read as UTC — every producer here (the
+    OAuth endpoint, codex rollouts) emits UTC wall-clock times."""
+    if isinstance(value, (int, float)):
+        return value / 1000 if value > 1e12 else float(value)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    return None
+
+
+def _window(name: str, used_percent: float | None, resets_at_iso: str | None,
+            window_minutes: float | int | None = None,
+            as_of_epoch: float | None = None) -> dict:
+    return _enrich_window({"name": name, "used_percent": used_percent,
+                           "resets_at": resets_at_iso,
+                           "window_minutes": window_minutes}, as_of_epoch)
+
+
+PACE_MIN_ELAPSED_FRACTION = 0.05  # below this the pace denominator is noise
+HEADROOM_TIGHT = 70.0
+HEADROOM_CRITICAL = 90.0
+
+
+def _enrich_window(w: dict, as_of_epoch: float | None = None) -> dict:
+    """Derive left/reset/pace/headroom from ONE reading — no history, no
+    persistence, no gates (the no-budget-machinery rule).
+
+    pace = fraction-used / fraction-of-window-elapsed, with the window start
+    inferred as resets_at minus window length. >1x burns faster than the
+    window replenishes; time_to_exhaustion extrapolates the same line.
+    Linear-burn on a rolling window is a stated heuristic (confidence:
+    derived) — skipped while <5% of the window has elapsed. headroom is
+    percent-only; consumers must read resets_in_seconds beside it (a
+    critical window minutes from reset is self-healing).
+
+    Timebases: used_percent is a fact AS OF the reading (as_of_epoch), so
+    pace's elapsed fraction is measured there too — mixing in wall-clock-now
+    would understate burn on aged snapshots. resets_in_seconds and the
+    exhaustion projection are now-facts (countdowns for the caller)."""
+    used = w.get("used_percent")
+    if isinstance(used, (int, float)):
+        w["left_percent"] = round(max(0.0, 100.0 - used), 1)
+    reset_epoch = _parse_epoch_or_iso(w.get("resets_at"))
+    now = _now()
+    as_of = as_of_epoch if isinstance(as_of_epoch, (int, float)) else now
+    if reset_epoch is not None:
+        if reset_epoch <= now:
+            # the reading predates its own window reset: used_percent is
+            # stale-high and the true number is unknowable without a re-probe
+            w["already_reset"] = True
+        else:
+            w["resets_in_seconds"] = int(reset_epoch - now)
+    mins = w.get("window_minutes")
+    if (isinstance(used, (int, float)) and used >= 1.0
+            and isinstance(mins, (int, float)) and mins > 0
+            and reset_epoch is not None and not w.get("already_reset")):
+        window_s = mins * 60.0
+        elapsed_s = window_s - (reset_epoch - as_of)
+        if PACE_MIN_ELAPSED_FRACTION * window_s <= elapsed_s <= window_s:
+            w["pace"] = round((used / 100.0) / (elapsed_s / window_s), 2)
+            if used >= 100.0:
+                w["time_to_exhaustion_seconds"] = 0
+            else:
+                # exhaustion projected from the reading, expressed as a
+                # now-countdown; an expired projection is omitted, not lied
+                tte_now = elapsed_s * (100.0 - used) / used - (now - as_of)
+                if tte_now > 0:
+                    w["time_to_exhaustion_seconds"] = int(tte_now)
+    if not w.get("already_reset") and isinstance(used, (int, float)):
+        w["headroom"] = ("critical" if used >= HEADROOM_CRITICAL
+                         else "tight" if used >= HEADROOM_TIGHT else "ok")
+    else:
+        w["headroom"] = None
+    return w
+
+
+_HEADROOM_RANK = {"ok": 0, "tight": 1, "critical": 2}
+
+
+def _pool_headroom(usage: dict | None) -> dict | None:
+    """Worst window's label, naming the window that drove it. None when the
+    pool has no numeric readings."""
+    if not usage or not usage.get("windows"):
+        return None
+    worst = None
+    for w in usage["windows"]:
+        level = w.get("headroom")
+        if level and (worst is None
+                      or _HEADROOM_RANK[level] > _HEADROOM_RANK[worst["level"]]):
+            worst = {"level": level, "window": w["name"],
+                     "used_percent": w.get("used_percent")}
+    return worst
 
 
 # ---------------------------------------------------------------- claude
@@ -261,6 +409,7 @@ def _claude_usage_deep(token: str, cache_dir: Path, timeout: float) -> dict:
                 "Authorization": f"Bearer {token}",
                 "anthropic-beta": "oauth-2025-04-20",
                 "Accept": "application/json",
+                "User-Agent": CLAUDE_USAGE_UA,
             },
         )
         try:
@@ -289,17 +438,31 @@ def _claude_usage_deep(token: str, cache_dir: Path, timeout: float) -> dict:
 
 
 def _claude_usage_shape(data: dict, fetched_at: float, stale: bool = False) -> dict:
+    limits = [lim for lim in (data.get("limits") or []) if isinstance(lim, dict)]
+    # The endpoint ships its own per-limit severity classification — the
+    # provider's ground truth, passed through verbatim beside our derived
+    # headroom (limits[].kind session/weekly_all mirror five_hour/seven_day).
+    severity_by_kind = {lim["kind"]: lim["severity"] for lim in limits
+                        if lim.get("kind") and lim.get("severity")}
     windows = []
-    for key, name in (("five_hour", "5h"), ("seven_day", "7d")):
+    for key, name, mins, kind in (("five_hour", "5h", 300, "session"),
+                                  ("seven_day", "7d", 10080, "weekly_all")):
         block = data.get(key) or {}
         util = block.get("utilization")
-        windows.append(_window(name, round(util, 1) if isinstance(util, (int, float)) else None,
-                               block.get("resets_at")))
-    for lim in data.get("limits") or []:
-        if isinstance(lim, dict) and lim.get("kind") == "weekly_scoped":
+        w = _window(name, round(util, 1) if isinstance(util, (int, float)) else None,
+                    block.get("resets_at"), window_minutes=mins, as_of_epoch=fetched_at)
+        if kind in severity_by_kind:
+            w["severity"] = severity_by_kind[kind]
+        windows.append(w)
+    for lim in limits:
+        if lim.get("kind") == "weekly_scoped":
             scope = ((lim.get("scope") or {}).get("model") or {}).get("display_name") \
                 or (lim.get("scope") or {}).get("surface") or "scoped"
-            windows.append(_window(f"7d:{scope}", lim.get("percent"), lim.get("resets_at")))
+            w = _window(f"7d:{scope}", lim.get("percent"), lim.get("resets_at"),
+                        window_minutes=10080, as_of_epoch=fetched_at)
+            if lim.get("severity"):
+                w["severity"] = lim["severity"]
+            windows.append(w)
     extra = data.get("extra_usage") or {}
     out = {
         "source": "oauth-endpoint",
@@ -316,10 +479,12 @@ def _claude_usage_shape(data: dict, fetched_at: float, stale: bool = False) -> d
             "used_credits": extra.get("used_credits"),
             "monthly_limit": extra.get("monthly_limit"),
         }
+    out["headroom"] = _pool_headroom(out)
     return out
 
 
-def probe_claude(home: Path, deep: bool, timeout: float, cache_dir: Path) -> dict:
+def probe_claude(home: Path, net_usage: bool, timeout: float, cache_dir: Path,
+                 versions: bool = True) -> dict:
     path = shutil.which("claude")
     result: dict = {"installed": bool(path), "version": None,
                     "auth": {"status": "unknown", "method": None, "plan": None},
@@ -332,7 +497,7 @@ def probe_claude(home: Path, deep: bool, timeout: float, cache_dir: Path) -> dic
                 "claude-subagent lanes route via the in-session Agent tool")
         else:
             result["verdict"] = "absent"
-    else:
+    elif versions:
         result["version"] = _version_of("claude", timeout)
 
     creds = _claude_creds(home, timeout)
@@ -352,16 +517,24 @@ def probe_claude(home: Path, deep: bool, timeout: float, cache_dir: Path) -> dic
     else:
         result["auth"]["status"] = "missing"
 
-    if deep and result["auth"]["status"] == "ok" and creds and creds.get("accessToken"):
+    if net_usage and result["auth"]["status"] == "ok" and creds and creds.get("accessToken"):
         try:
             result["usage"] = _claude_usage_deep(creds["accessToken"], cache_dir, timeout)
         except Exception as e:  # noqa: BLE001 — a usage-probe bug must degrade
             result["usage"] = _usage_error(f"usage probe error: {e!r}")  # …not kill the report
     elif result["auth"]["status"] == "ok":
-        result["usage"] = {
-            "source": None, "windows": None,
-            "note": "account quota (5h/7d/scoped) needs --deep — local files are history, not quota",
-        }
+        if net_usage:
+            # already in a usage-probing mode, so the only way here is creds
+            # without a readable accessToken — pointing back at the flag the
+            # user just passed would be circular advice
+            note = ("credentials contain no readable accessToken (keychain-only "
+                    "or partial login state) — run `claude` once to refresh the "
+                    "login, or read the statusline rate_limits block inside a "
+                    "live session")
+        else:
+            note = ("account quota (5h/7d/scoped) needs --usage or --deep — "
+                    "local files are history, not quota")
+        result["usage"] = {"source": None, "windows": None, "note": note}
 
     usable = bool(path) or in_session
     status = result["auth"]["status"]
@@ -430,14 +603,21 @@ def _codex_rollout_snapshot(codex_home: Path) -> tuple[str | None, dict] | None:
     return None
 
 
-def _codex_windows(rl: dict) -> list[dict]:
+def _codex_windows(rl: dict, snapshot_epoch: float | None = None) -> list[dict]:
     windows = []
     for key, default_name in (("primary", "5h"), ("secondary", "7d")):
         w = rl.get(key)
         if not isinstance(w, dict):
             continue
         name = _humanize_minutes(w.get("window_minutes"), default_name)
-        windows.append(_window(name, w.get("used_percent"), _iso(w.get("resets_at"))))
+        resets = _iso(w.get("resets_at"))
+        if resets is None and snapshot_epoch is not None \
+                and isinstance(w.get("resets_in_seconds"), (int, float)):
+            # 0.41–0.42-era rollouts carry the reset RELATIVE to the event
+            resets = _iso(snapshot_epoch + w["resets_in_seconds"])
+        windows.append(_window(name, w.get("used_percent"), resets,
+                               window_minutes=w.get("window_minutes"),
+                               as_of_epoch=snapshot_epoch))
     if not windows:
         # legacy 2025-era flat shape (pre-nested-windows rollouts)
         for key, name in (("primary_used_percent", "5h"),
@@ -447,8 +627,51 @@ def _codex_windows(rl: dict) -> list[dict]:
     return windows
 
 
-def _codex_appserver_deep(timeout: float) -> dict | None:
-    """Live rate limits via `codex app-server` JSON-RPC (documented surface)."""
+CODEX_APPSERVER_CACHE_TTL_S = 180
+
+
+def _codex_appserver_usage(timeout: float, cache_dir: Path | None) -> dict | None:
+    """App-server readout with the same 180s politeness cache as the claude
+    probe — the gauge is advertised as quick, and a cold app-server spawn
+    costs seconds. No failure backoff needed (local process, no 429s)."""
+    def shape(raw: dict, plan, fetched_at: float) -> dict:
+        usage = {"source": "app-server", "network": True, "confidence": "exact",
+                 "scope": "account-wide", "as_of": _iso(fetched_at),
+                 "age_seconds": int(_now() - fetched_at),
+                 "windows": _codex_windows(raw, fetched_at),
+                 "plan_type": plan}
+        usage["headroom"] = _pool_headroom(usage)
+        return usage
+
+    cache = (cache_dir / "codex-usage.json") if cache_dir else None
+    if cache:
+        c = _read_json(cache)
+        if (isinstance(c, dict) and isinstance(c.get("fetched_at"), (int, float))
+                and isinstance(c.get("raw"), dict)
+                and 0 <= _now() - c["fetched_at"] < CODEX_APPSERVER_CACHE_TTL_S):
+            return shape(c["raw"], c.get("plan_type"), c["fetched_at"])
+    fetched = _codex_appserver_fetch(timeout)
+    if not fetched:
+        return None
+    raw, plan = fetched
+    fetched_at = _now()
+    if cache:
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            tmp = cache.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"fetched_at": fetched_at, "raw": raw,
+                                       "plan_type": plan}))
+            os.chmod(tmp, 0o600)
+            tmp.replace(cache)
+        except OSError:
+            pass
+    return shape(raw, plan, fetched_at)
+
+
+def _codex_appserver_fetch(timeout: float) -> tuple[dict, str | None] | None:
+    """Live rate limits via `codex app-server` JSON-RPC (documented surface).
+    Returns (rate-limit dict normalized to the rollout snake_case shape,
+    plan_type) so _codex_windows stays the single window parser."""
     msgs = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize",
          "params": {"clientInfo": {"name": "aimr-doctor", "version": "1.0"}}},
@@ -488,23 +711,20 @@ def _codex_appserver_deep(timeout: float) -> dict | None:
                 continue
             result = msg.get("result") or {}
             rl = result.get("rateLimits") or result
-            windows = []
-            for key, default_name in (("primary", "5h"), ("secondary", "7d")):
+            norm: dict = {}
+            for key in ("primary", "secondary"):
                 w = rl.get(key)
                 if not isinstance(w, dict):
                     continue
-                name = _humanize_minutes(
-                    w.get("windowDurationMins", w.get("window_minutes")), default_name)
                 resets = w.get("resetsAt", w.get("resets_at"))
-                if isinstance(resets, (int, float)):
-                    resets = _iso(resets)
-                windows.append(_window(name, w.get("usedPercent", w.get("used_percent")), resets))
-            if windows:
-                return {"source": "app-server", "network": True, "confidence": "exact",
-                        "scope": "account-wide", "as_of": _iso(_now()),
-                        "age_seconds": 0, "windows": windows,
-                        "plan_type": result.get("planType")}
-            return None
+                if isinstance(resets, str):
+                    resets = _parse_epoch_or_iso(resets)
+                norm[key] = {
+                    "used_percent": w.get("usedPercent", w.get("used_percent")),
+                    "window_minutes": w.get("windowDurationMins", w.get("window_minutes")),
+                    "resets_at": resets,
+                }
+            return (norm, result.get("planType")) if norm else None
         return None
     finally:
         try:
@@ -514,7 +734,8 @@ def _codex_appserver_deep(timeout: float) -> dict | None:
             pass
 
 
-def probe_codex(deep: bool, timeout: float) -> dict:
+def probe_codex(net_usage: bool, timeout: float, versions: bool = True,
+                cache_dir: Path | None = None) -> dict:
     codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     path = shutil.which("codex")
     result: dict = {"installed": bool(path), "version": None,
@@ -522,7 +743,8 @@ def probe_codex(deep: bool, timeout: float) -> dict:
                     "usage": None, "verdict": "absent", "notes": []}
     if not path:
         return result
-    result["version"] = _version_of("codex", timeout)
+    if versions:
+        result["version"] = _version_of("codex", timeout)
 
     rc, _out, err = _run(["codex", "login", "status"], timeout)
     if rc == 0:
@@ -546,33 +768,41 @@ def probe_codex(deep: bool, timeout: float) -> dict:
                 result["auth"]["plan"] = plan
 
     snap = _codex_rollout_snapshot(codex_home)
+    snap_usage = None
     if snap:
         ts, rl = snap
-        age = None
-        if ts:
-            try:
-                age = int(_now() - datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
-            except ValueError:
-                age = None
-        result["usage"] = {
+        snap_epoch = _parse_epoch_or_iso(ts)
+        snap_usage = {
             "source": "rollout-scan", "network": False, "confidence": "exact",
             "scope": "account numbers, machine-local snapshot",
-            "as_of": ts, "age_seconds": age,
-            "windows": _codex_windows(rl),
+            "as_of": ts,
+            "age_seconds": int(_now() - snap_epoch) if snap_epoch else None,
+            "windows": _codex_windows(rl, snap_epoch),
             "plan_type": rl.get("plan_type"),
         }
+        snap_usage["headroom"] = _pool_headroom(snap_usage)
         credits = rl.get("credits")
         if isinstance(credits, dict) and credits.get("has_credits"):
-            result["usage"]["credits_balance"] = credits.get("balance")
-    elif deep and result["auth"]["status"] == "ok":
-        result["usage"] = _codex_appserver_deep(timeout) or {
-            "source": None, "windows": None,
-            "note": "no rollout snapshot and app-server probe failed",
-        }
-    elif result["auth"]["status"] == "ok":
+            snap_usage["credits_balance"] = credits.get("balance")
+
+    authed = result["auth"]["status"] == "ok"
+    # A snapshot only counts as an answer while it still describes a live
+    # window; one whose windows have all reset (or parsed to nothing) must
+    # not suppress the free app-server readout in usage/deep modes.
+    snap_is_live = bool(snap_usage) and any(
+        not w.get("already_reset") for w in snap_usage["windows"])
+    if snap_usage and (snap_is_live or not (net_usage and authed)):
+        result["usage"] = snap_usage
+    elif net_usage and authed:
+        result["usage"] = _codex_appserver_usage(timeout, cache_dir) \
+            or snap_usage \
+            or {"source": None, "windows": None,
+                "note": "no rollout snapshot and app-server probe failed"}
+    elif authed:
         result["usage"] = {
             "source": None, "windows": None,
-            "note": "no codex session on this machine yet — quota appears after the first turn (or use --deep)",
+            "note": "no codex session on this machine yet — quota appears after the "
+                    "first turn (or use --usage / --deep)",
         }
 
     result["verdict"] = {"ok": "ready", "missing": "unauthenticated"}.get(
@@ -582,14 +812,15 @@ def probe_codex(deep: bool, timeout: float) -> dict:
 
 # ---------------------------------------------------------------- gemini
 
-def probe_gemini(home: Path, deep: bool, timeout: float) -> dict:
+def probe_gemini(home: Path, liveness: bool, timeout: float, versions: bool = True) -> dict:
     path = shutil.which("gemini")
     result: dict = {"installed": bool(path), "version": None,
                     "auth": {"status": "unknown", "method": None, "plan": None},
                     "usage": None, "verdict": "absent", "notes": []}
     if not path:
         return result
-    result["version"] = _version_of("gemini", timeout)
+    if versions:
+        result["version"] = _version_of("gemini", timeout)
 
     gdir = home / ".gemini"
     settings = _read_json(gdir / "settings.json") or {}
@@ -622,7 +853,7 @@ def probe_gemini(home: Path, deep: bool, timeout: float) -> dict:
     else:
         result["auth"]["status"] = "missing"
 
-    if deep and result["auth"]["status"] in ("ok", "blocked"):
+    if liveness and result["auth"]["status"] in ("ok", "blocked"):
         rc, out, _err = _run(
             ["gemini", "-p", "reply with the word ok", "--output-format", "json"], timeout)
         if rc == 0:
@@ -651,19 +882,7 @@ def _grok_auth_entries(grok_home: Path) -> list[dict]:
     return [v for v in data.values() if isinstance(v, dict)]
 
 
-def _parse_expiry(value) -> float | None:
-    """expires_at as epoch seconds; tolerate ms and ISO strings."""
-    if isinstance(value, (int, float)):
-        return value / 1000 if value > 1e12 else float(value)
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return None
-    return None
-
-
-def probe_grok(deep: bool, timeout: float) -> dict:
+def probe_grok(liveness: bool, timeout: float, versions: bool = True) -> dict:
     grok_home = Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
     path = shutil.which("grok")
     # npm-postinstall layouts self-copy the binary under $GROK_HOME/bin
@@ -679,14 +898,15 @@ def probe_grok(deep: bool, timeout: float) -> dict:
         result["notes"].append(
             f"binary at {binary} is NOT on PATH — invoke it by that absolute path "
             "(or add $GROK_HOME/bin to PATH)")
-    result["version"] = _version_of(binary, timeout)
+    if versions:
+        result["version"] = _version_of(binary, timeout)
 
     entries = _grok_auth_entries(grok_home)
     if os.environ.get("XAI_API_KEY"):
         result["auth"]["status"] = "ok"
         result["auth"]["method"] = "api-key"
     elif entries:
-        expiries = [_parse_expiry(e.get("expires_at")) for e in entries]
+        expiries = [_parse_epoch_or_iso(e.get("expires_at")) for e in entries]
         live = [x for x in expiries if x and x > _now()]
         result["auth"]["method"] = "oidc-session"
         if live:
@@ -700,7 +920,7 @@ def probe_grok(deep: bool, timeout: float) -> dict:
     else:
         result["auth"]["status"] = "missing"
 
-    if deep and result["auth"]["status"] == "ok":
+    if liveness and result["auth"]["status"] == "ok":
         rc, out, _err = _run(
             [binary, "--no-auto-update", "-p", "ping",
              "--output-format", "json", "--max-turns", "1"], timeout)
@@ -725,7 +945,7 @@ def probe_grok(deep: bool, timeout: float) -> dict:
 
 # ------------------------------------------------------------ orchestration
 
-def build_report(registry: dict, deep: bool, timeout: float,
+def build_report(registry: dict, mode: str, timeout: float,
                  only_pools: list[str] | None) -> dict:
     home = Path.home()
     # Per-user dir: a shared /tmp/aimr would serve user A's account numbers
@@ -734,11 +954,21 @@ def build_report(registry: dict, deep: bool, timeout: float,
     cache_dir = Path(os.environ.get("AIMR_CACHE_DIR")
                      or Path(tempfile.gettempdir()) / f"aimr-{uid}")
 
+    # Probe policy per mode. net_usage = the FREE quota readouts (claude
+    # OAuth GET, codex app-server); liveness = real prompts that can draw
+    # quota (gemini/grok) — usage mode never sends those. versions skipped
+    # in usage mode: the gauge doesn't render them and node CLIs are slow.
+    net_usage = mode in ("usage", "deep")
+    liveness = mode == "deep"
+    versions = mode != "usage"
+
     probes = {
-        "claude-sub": lambda: probe_claude(home, deep, timeout, cache_dir),
-        "codex-sub": lambda: probe_codex(deep, timeout),
-        "gemini": lambda: probe_gemini(home, deep, timeout),
-        "grok": lambda: probe_grok(deep, timeout),
+        "claude-sub": lambda: probe_claude(home, net_usage, timeout, cache_dir,
+                                           versions=versions),
+        "codex-sub": lambda: probe_codex(net_usage, timeout, versions=versions,
+                                         cache_dir=cache_dir),
+        "gemini": lambda: probe_gemini(home, liveness, timeout, versions=versions),
+        "grok": lambda: probe_grok(liveness, timeout, versions=versions),
     }
     pool_ids = list(registry.get("pools") or probes)
     if only_pools:
@@ -756,6 +986,19 @@ def build_report(registry: dict, deep: bool, timeout: float,
                               pools[pid]["verdict"]))
         if hint:
             pools[pid]["fix"] = hint
+
+    report = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": _iso(_now()),
+        "mode": mode,
+        "derived_fields_note": DERIVED_FIELDS_NOTE,
+        "pools": pools,
+    }
+    if mode == "usage":
+        # The gauge is a usage lens: pools only, no capabilities/unrouted
+        # keys — `mode` is the shape discriminator (consumers key on it, not
+        # on schema_version). Routability is the full doctor's job.
+        return report
 
     capabilities: dict[str, dict] = {}
     for cap_name, cap in (registry.get("capabilities") or {}).items():
@@ -785,16 +1028,10 @@ def build_report(registry: dict, deep: bool, timeout: float,
             reasons = {f"{e['pool']}: {e['pool_verdict']}" for e in unavailable}
             capabilities[cap_name]["blocked_reason"] = ", ".join(sorted(reasons)) or "no providers"
 
-    unrouted = sorted(c for c in UNROUTED_CLIS if shutil.which(c))
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "generated_at": _iso(_now()),
-        "mode": "deep" if deep else "local",
-        "pools": pools,
-        "capabilities": capabilities,
-        "unrouted_clis_detected": unrouted,
-    }
+    report["capabilities"] = capabilities
+    report["unrouted_clis_detected"] = sorted(
+        c for c in UNROUTED_CLIS if shutil.which(c))
+    return report
 
 
 # ---------------------------------------------------------------- rendering
@@ -811,7 +1048,7 @@ def _fmt_usage(usage: dict | None) -> str:
         age = usage.get("age_seconds")
         suffix = ""
         if isinstance(age, int) and age >= 0:
-            suffix = f" (as of {age}s ago)" if age < 3600 else f" (as of {age // 3600}h ago)"
+            suffix = f" (as of {_humanize_seconds(age)} ago)"
         stale = " STALE" if usage.get("stale") else ""
         return f"usage: {' · '.join(parts)}{suffix}{stale} [{usage.get('source')}]"
     if usage.get("error"):
@@ -819,6 +1056,101 @@ def _fmt_usage(usage: dict | None) -> str:
     if usage.get("note"):
         return f"usage: {usage['note']}"
     return ""
+
+
+GAUGE_BAR_WIDTH = 20
+
+
+def _gauge_bar(used: float | int | None) -> str:
+    if not isinstance(used, (int, float)):
+        return "?" * GAUGE_BAR_WIDTH
+    filled = min(GAUGE_BAR_WIDTH, max(0, round(used / 100 * GAUGE_BAR_WIDTH)))
+    # only truly-0% renders empty and truly-100% renders full — 97.6% must
+    # stay visually distinguishable from an exhausted window
+    if used > 0:
+        filled = max(1, filled)
+    if used < 100:
+        filled = min(GAUGE_BAR_WIDTH - 1, filled)
+    return "█" * filled + "░" * (GAUGE_BAR_WIDTH - filled)
+
+
+def _gauge_window_line(w: dict, name_width: int) -> str:
+    used = w.get("used_percent")
+    bits = [f"    {w['name']:<{name_width}} {_gauge_bar(used)}"]
+    if isinstance(used, (int, float)):
+        bits.append(f"{used:5.1f}% used · {w.get('left_percent', 0):5.1f}% left")
+    else:
+        bits.append("no reading")
+    if w.get("already_reset"):
+        bits.append("window has reset since this reading — true usage is lower")
+    elif isinstance(w.get("resets_in_seconds"), int):
+        bits.append(f"resets in {_humanize_seconds(w['resets_in_seconds'])}")
+    pace = w.get("pace")
+    if isinstance(pace, (int, float)):
+        p = f"pace {pace:.1f}x"
+        tte = w.get("time_to_exhaustion_seconds")
+        resets_in = w.get("resets_in_seconds")
+        if isinstance(tte, int) and isinstance(resets_in, int) and tte < resets_in:
+            p += f" — empty in ~{_humanize_seconds(tte)} at this rate, before the reset"
+        bits.append(p)
+    if w.get("headroom") in ("tight", "critical"):
+        bits.append(w["headroom"].upper())
+    if w.get("severity") and w["severity"] != "normal":
+        bits.append(f"server severity: {w['severity']}")
+    return "  ·  ".join([bits[0] + "  " + bits[1]] + bits[2:]) if len(bits) > 1 else bits[0]
+
+
+def render_gauge(report: dict) -> str:
+    """The --usage lens: per-window used/left/reset bars + derived pace and
+    headroom. Reports only — thresholds documented in setup.md, no gating."""
+    lines = [f"AIMR gauge — {report['generated_at']} "
+             "(free readouts only; no liveness probes, no quota drawn)", ""]
+    summaries = []
+    windows_rendered = 0
+    for pid, p in report["pools"].items():
+        usage = p.get("usage") or {}
+        verdict = p.get("verdict", "unknown")
+        auth = p.get("auth") or {}
+        if usage.get("windows"):
+            head = f"  {pid:<11} {verdict}"
+            if auth.get("plan"):
+                head += f" · {auth['plan']}"
+            head += f" · {usage.get('source')}"
+            age = usage.get("age_seconds")
+            if isinstance(age, int) and age >= 0:
+                head += f" (reading {_humanize_seconds(age)} old)"
+            if usage.get("stale"):
+                head += " STALE — served last-good after a failed fetch"
+            lines.append(head)
+            name_width = max(len(w["name"]) for w in usage["windows"])
+            for w in usage["windows"]:
+                lines.append(_gauge_window_line(w, name_width))
+                windows_rendered += 1
+            extra = usage.get("extra_usage")
+            if isinstance(extra, dict):
+                lines.append(f"    extra usage: {extra.get('used_credits')} of "
+                             f"{extra.get('monthly_limit')} monthly credits")
+            hr = usage.get("headroom")
+            if hr:
+                summaries.append(
+                    f"{pid} {hr['level'].upper()} ({hr['window']} at "
+                    f"{hr['used_percent']}% used)" if hr["level"] != "ok" else f"{pid} ok")
+        elif usage.get("error"):
+            lines.append(f"  {pid:<11} {verdict} — usage unavailable ({usage['error']})")
+        elif usage.get("note"):
+            lines.append(f"  {pid:<11} {verdict} — {usage['note']}")
+        else:
+            lines.append(f"  {pid:<11} {verdict} — no readout")
+    lines.append("")
+    if summaries:
+        footer = "; ".join(summaries)
+    elif windows_rendered:
+        footer = ("unknown — every reading predates its own window reset; "
+                  "re-probe after a fresh provider turn")
+    else:
+        footer = "no live quota readings on this machine"
+    lines.append("  headroom: " + footer)
+    return "\n".join(lines)
 
 
 def render_human(report: dict) -> str:
@@ -868,16 +1200,23 @@ def main() -> int:
         description="AIMR doctor: which lanes are routable right now "
                     "(installed / authenticated / quota).",
         epilog="Default run is LOCAL-ONLY (<2s, zero network, zero quota). "
-               "--deep adds network probes: claude OAuth usage (cached 180s), "
-               "codex app-server, gemini+grok liveness (the grok probe draws "
-               "the shared weekly pool). Reads credential files locally for "
-               "expiry/plan fields (--deep also reads the claude access token "
-               "to send as a Bearer header); never prints secrets. "
-               "Exit codes: 0 = >=1 capability routable, 2 = nothing "
-               "routable, 1 = doctor failure.")
+               "--usage is the quick gauge: FREE quota readouts only (claude "
+               "OAuth usage cached 180s, codex rollout/app-server) — no "
+               "liveness probes, no quota drawn. --deep adds everything: "
+               "usage plus gemini+grok liveness (the grok probe draws the "
+               "shared weekly pool). Reads credential files locally for "
+               "expiry/plan fields (--usage/--deep also read the claude "
+               "access token to send as a Bearer header); never prints "
+               "secrets. Exit codes: 0 = >=1 capability routable, 2 = "
+               "nothing routable, 1 = doctor failure (--usage: 0 = gauge "
+               "produced, 1 = failure).")
     ap.add_argument("--json", action="store_true", help="machine-readable report")
-    ap.add_argument("--deep", action="store_true",
-                    help="add network probes (live quota / liveness)")
+    speed = ap.add_mutually_exclusive_group()
+    speed.add_argument("--usage", action="store_true",
+                       help="quota gauge: used/left/reset per window, free "
+                            "readouts only (no liveness probes, no quota drawn)")
+    speed.add_argument("--deep", action="store_true",
+                       help="add all network probes (live quota + liveness)")
     ap.add_argument("--pool", action="append", default=None, metavar="POOL",
                     help="probe only this pool (repeatable)")
     ap.add_argument("--timeout", type=float, default=5.0,
@@ -894,14 +1233,20 @@ def main() -> int:
         print(f"aimr_doctor: cannot read registry at {registry_path}", file=sys.stderr)
         return 1
 
+    mode = "deep" if args.deep else "usage" if args.usage else "local"
     try:
-        report = build_report(registry, deep=args.deep, timeout=args.timeout,
+        report = build_report(registry, mode=mode, timeout=args.timeout,
                               only_pools=args.pool)
     except Exception as e:  # noqa: BLE001 — the doctor must fail loudly, not trace
         print(f"aimr_doctor: probe failed: {e!r}", file=sys.stderr)
         return 1
 
-    print(json.dumps(report, indent=2) if args.json else render_human(report))
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print(render_gauge(report) if mode == "usage" else render_human(report))
+    if mode == "usage":
+        return 0  # the gauge reports usage; routability is the full doctor's job
     routable = any(c["best_available"] for c in report["capabilities"].values())
     return 0 if routable else 2
 
